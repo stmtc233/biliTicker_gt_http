@@ -1,3 +1,5 @@
+// abstraction.rs
+
 use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
@@ -5,11 +7,12 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy)] // 添加 Clone 和 Copy
 pub(crate) enum VerifyType {
     Slide,
     Click,
 }
-
+// ... 其余代码不变 ...
 pub(crate) trait Api {
     type ArgsType;
     /// ### 申请验证码
@@ -136,11 +139,16 @@ pub(crate) trait Api {
     /// #### 返回值
     /// - img
     fn download_img(&self, img_url: &str) -> Result<Vec<u8>> {
-        let res = self.client().get(img_url).send().map_err(net_work_error)?;
+        // 使用不带代理的客户端
+        let res = self.noproxy_client().get(img_url).send().map_err(net_work_error)?;
         Ok(res.bytes().unwrap().to_vec())
     }
 
+    /// 返回可能带代理的客户端
     fn client(&self) -> &Client;
+    
+    /// 返回一个永不带代理的客户端，用于下载图片
+    fn noproxy_client(&self) -> &Client;
 }
 
 pub(crate) trait GenerateW: Api {
