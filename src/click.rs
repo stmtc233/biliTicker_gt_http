@@ -4,7 +4,9 @@ use crate::abstraction::{Api, GenerateW, Test, VerifyType};
 use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
-use captcha_breaker::captcha::ChineseClick0;
+use captcha_breaker::captcha::{Captcha, ChineseClick0}; // 引入 Captcha trait
+use captcha_breaker::environment::CaptchaEnvironment;    // 引入 CaptchaEnvironment
+use once_cell::sync::Lazy; // 引入 Lazy
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,29 +15,39 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 use crate::w::click_calculate;
 
+// --- 全局模型实例 ---
+// 使用 Lazy 来确保模型只在第一次被访问时加载一次，并且是线程安全的。
+static GLOBAL_CLICK_BREAKER: Lazy<Arc<ChineseClick0>> = Lazy::new(|| {
+    println!("Loading ChineseClick0 ONNX model... This should only happen once.");
+    let env = CaptchaEnvironment::default();
+    let breaker = env.load_captcha_breaker::<ChineseClick0>().unwrap();
+    println!("Model loaded successfully.");
+    Arc::new(breaker)
+});
+
+
 #[derive(Clone)]
 pub struct Click {
     client: Client,
     noproxy_client: Client,
     verify_type: VerifyType,
-    cb: Arc<ChineseClick0>,
+    cb: Arc<ChineseClick0>, // 这个字段保持不变，它将持有对全局实例的引用
 }
 
 impl Default for Click {
     fn default() -> Self {
-        let env = captcha_breaker::environment::CaptchaEnvironment::default();
         Click {
             client: Client::new(),
             noproxy_client: Client::new(),
             verify_type: VerifyType::Click,
-            cb: Arc::new(env.load_captcha_breaker::<ChineseClick0>().unwrap()),
+            // 不再重新加载，而是克隆全局实例的 Arc 指针
+            cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
         }
     }
 }
 
 impl Click {
     pub fn new_with_proxy(proxy_url: &str) -> Result<Self> {
-        // 修复：使用 Proxy::all
         let proxy = reqwest::Proxy::all(proxy_url)
             .map_err(|e| other("无效的代理 URL", e))?;
         let proxied_client = Client::builder()
@@ -43,15 +55,16 @@ impl Click {
             .build()
             .map_err(|e| other("构建代理客户端失败", e))?;
         
-        let env = captcha_breaker::environment::CaptchaEnvironment::default();
         Ok(Click {
             client: proxied_client,
             noproxy_client: Client::new(),
             verify_type: VerifyType::Click,
-            cb: Arc::new(env.load_captcha_breaker::<ChineseClick0>().unwrap()),
+            // 同样，克隆全局实例的 Arc 指针
+            cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
         })
     }
-    // ... 其余代码不变 ...
+    
+    // ... simple_match, simple_match_retry, vvv 等其他方法保持不变 ...
     pub fn simple_match(&mut self, gt: &str, challenge: &str) -> Result<String> {
         self.get_c_s(gt, challenge, None)?;
         self.get_type(gt, challenge, None)?;
@@ -102,24 +115,27 @@ impl Click {
     }
 }
 
+
+// Api, GenerateW, Test trait 的实现保持不变
+// ...
 impl Api for Click {
     type ArgsType = String;
 
     fn register_test(&self, url: &str) -> crate::error::Result<(String, String)> {
         let res = self.client().get(url).send().map_err(net_work_error)?;
         let res = res.json::<Value>().expect("解析失败");
-        let res = res
+        let res_data = res
             .get("data")
             .ok_or_else(|| missing_param("data"))?
             .get("geetest")
             .ok_or_else(|| missing_param("geetest"))?;
         Ok((
-            res.get("gt")
+            res_data.get("gt")
                 .ok_or_else(|| missing_param("gt"))?
                 .as_str()
                 .ok_or_else(|| missing_param("gt"))?
                 .to_string(),
-            res.get("challenge")
+            res_data.get("challenge")
                 .ok_or_else(|| missing_param("challenge"))?
                 .as_str()
                 .ok_or_else(|| missing_param("challenge"))?
@@ -152,10 +168,10 @@ impl Api for Click {
             .strip_suffix(")")
             .ok_or_else(|| other_without_source("后缀错误"))?;
         let res: Value = serde_json::from_str(res).map_err(parse_error)?;
-        let res = res.get("data").ok_or_else(|| missing_param("data"))?;
-        let c: Vec<u8> = serde_json::from_value(res.get("c").ok_or_else(|| missing_param("c"))?.clone())
+        let res_data = res.get("data").ok_or_else(|| missing_param("data"))?;
+        let c: Vec<u8> = serde_json::from_value(res_data.get("c").ok_or_else(|| missing_param("c"))?.clone())
             .map_err(parse_error)?;
-        let static_server = res
+        let static_server = res_data
             .get("static_servers")
             .ok_or_else(|| missing_param("static_servers"))?
             .as_array()
@@ -166,7 +182,7 @@ impl Api for Click {
             .ok_or_else(|| other_without_source("static_servers里面咋没东西啊"))?;
         Ok((
             c,
-            res.get("s")
+            res_data.get("s")
                 .ok_or_else(|| missing_param("s"))?
                 .as_str()
                 .ok_or_else(|| missing_param("s"))?
@@ -174,7 +190,7 @@ impl Api for Click {
             format!(
                 "https://{}{}",
                 static_server,
-                res.get("pic")
+                res_data.get("pic")
                     .ok_or_else(|| missing_param("pic"))?
                     .as_str()
                     .ok_or_else(|| missing_param("pic"))?
@@ -202,14 +218,14 @@ impl Api for Click {
             .strip_suffix(")")
             .ok_or_else(|| other_without_source("后缀错误"))?;
         let res: Value = serde_json::from_str(res).map_err(parse_error)?;
-        let res = res.get("data").ok_or_else(|| missing_param("data"))?;
+        let res_data = res.get("data").ok_or_else(|| missing_param("data"))?;
         Ok((
-            res.get("result")
+            res_data.get("result")
                 .ok_or_else(|| missing_param("result"))?
                 .as_str()
                 .ok_or_else(|| missing_param("result"))?
                 .to_string(),
-            res.get("validate")
+            res_data.get("validate")
                 .ok_or_else(|| missing_param("validate"))?
                 .as_str()
                 .ok_or_else(|| missing_param("validate"))?
@@ -232,8 +248,8 @@ impl Api for Click {
             .strip_suffix(")")
             .ok_or_else(|| other_without_source("后缀错误"))?;
         let res: Value = serde_json::from_str(res).map_err(parse_error)?;
-        let res = res.get("data").ok_or_else(|| missing_param("data"))?;
-        let static_server = res
+        let res_data = res.get("data").ok_or_else(|| missing_param("data"))?;
+        let static_server = res_data
             .get("image_servers")
             .ok_or_else(|| missing_param("image_servers"))?
             .as_array()
@@ -245,7 +261,7 @@ impl Api for Click {
         Ok(format!(
             "https://{}{}",
             static_server,
-            res.get("pic")
+            res_data.get("pic")
                 .ok_or_else(|| missing_param("pic"))?
                 .as_str()
                 .ok_or_else(|| missing_param("pic"))?
