@@ -31,30 +31,11 @@ jobs:
             artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-linux-x86_64
             
-          # Linux ARM64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact_name: bili_ticket_gt_server
-            asset_name: bili-ticket-gt-server-linux-aarch64
-            cross: true
-            
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact_name: bili_ticket_gt_server.exe
             asset_name: bili-ticket-gt-server-windows-x86_64.exe
-            
-          # macOS x86_64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact_name: bili_ticket_gt_server
-            asset_name: bili-ticket-gt-server-macos-x86_64
-            
-          # macOS ARM64 (M1/M2)
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact_name: bili_ticket_gt_server
-            asset_name: bili-ticket-gt-server-macos-aarch64
 
     steps:
     - name: Checkout code
@@ -66,10 +47,6 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
-
-    - name: Install cross (for cross-compilation)
-      if: matrix.cross
-      run: cargo install cross --git https://github.com/cross-rs/cross
 
     - name: Cache cargo registry
       uses: actions/cache@v4
@@ -89,23 +66,21 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y pkg-config libssl-dev
 
-    - name: Install cross compilation dependencies (Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        sudo apt-get install -y gcc-aarch64-linux-gnu
-
     - name: Build with cargo
-      if: '!matrix.cross'
       run: cargo build --release --target ${{ matrix.target }}
 
-    - name: Build with cross
-      if: matrix.cross
-      run: cross build --release --target ${{ matrix.target }}
-
-    - name: List build artifacts (debug)
+    - name: List build artifacts (debug) - Unix
+      if: runner.os != 'Windows'
       run: |
         echo "Contents of target/${{ matrix.target }}/release/:"
         ls -la target/${{ matrix.target }}/release/ || echo "Directory not found"
+
+    - name: List build artifacts (debug) - Windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        Write-Host "Contents of target/${{ matrix.target }}/release/:"
+        Get-ChildItem -Path "target/${{ matrix.target }}/release/" -Force | Format-Table -AutoSize
 
     - name: Find and strip binary (Unix)
       if: runner.os != 'Windows'
@@ -124,14 +99,28 @@ jobs:
       if: runner.os == 'Windows'
       shell: powershell
       run: |
-        $binaryPath = Get-ChildItem -Path "target\${{ matrix.target }}\release\" -Name "*ticket*.exe" | Select-Object -First 1
-        if (-not $binaryPath) {
-          Write-Error "Could not find binary file"
+        $targetPath = "target\${{ matrix.target }}\release\"
+        Write-Host "Looking for binary in: $targetPath"
+        
+        # 查找包含 ticket 的 exe 文件
+        $binaryFiles = Get-ChildItem -Path $targetPath -Filter "*ticket*.exe" -ErrorAction SilentlyContinue
+        if ($binaryFiles.Count -eq 0) {
+          Write-Host "No *ticket*.exe files found, looking for any exe files..."
+          $binaryFiles = Get-ChildItem -Path $targetPath -Filter "*.exe" -ErrorAction SilentlyContinue
+        }
+        
+        if ($binaryFiles.Count -eq 0) {
+          Write-Error "Could not find any binary file"
           exit 1
         }
-        $fullBinaryPath = "target\${{ matrix.target }}\release\$binaryPath"
+        
+        $binaryFile = $binaryFiles[0]
+        $fullBinaryPath = $binaryFile.FullName
         Write-Host "Found binary at: $fullBinaryPath"
-        Add-Content -Path $env:GITHUB_ENV -Value "BINARY_FILE=$fullBinaryPath"
+        
+        # 将路径写入环境变量，使用正斜杠以便在后续步骤中使用
+        $envPath = $fullBinaryPath -replace '\\', '/'
+        Add-Content -Path $env:GITHUB_ENV -Value "BINARY_FILE=$envPath"
 
     - name: Create artifact directory
       run: mkdir -p artifacts
@@ -142,7 +131,13 @@ jobs:
 
     - name: Copy binary to artifacts (Windows)
       if: runner.os == 'Windows'
-      run: copy "$env:BINARY_FILE" artifacts\${{ matrix.asset_name }}
+      shell: powershell
+      run: |
+        $sourcePath = $env:BINARY_FILE -replace '/', '\'
+        $destPath = "artifacts\${{ matrix.asset_name }}"
+        Write-Host "Copying from: $sourcePath"
+        Write-Host "Copying to: $destPath"
+        Copy-Item -Path $sourcePath -Destination $destPath
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
