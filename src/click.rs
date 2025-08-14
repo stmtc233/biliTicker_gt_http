@@ -4,7 +4,7 @@ use crate::abstraction::{Api, GenerateW, Test, VerifyType};
 use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
-use captcha_breaker::captcha::{Captcha, ChineseClick0}; // 引入 Captcha trait
+use captcha_breaker::captcha::ChineseClick0;
 use captcha_breaker::environment::CaptchaEnvironment;    // 引入 CaptchaEnvironment
 use once_cell::sync::Lazy; // 引入 Lazy
 use reqwest::blocking::Client;
