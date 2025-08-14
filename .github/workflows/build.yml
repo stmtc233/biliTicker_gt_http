@@ -1,0 +1,227 @@
+name: Build Releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: bili-ticket-gt-server
+            asset_name: bili-ticket-gt-server-linux-x86_64
+            
+          # Linux ARM64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: bili-ticket-gt-server
+            asset_name: bili-ticket-gt-server-linux-aarch64
+            cross: true
+            
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: bili-ticket-gt-server.exe
+            asset_name: bili-ticket-gt-server-windows-x86_64.exe
+            
+          # macOS x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact_name: bili-ticket-gt-server
+            asset_name: bili-ticket-gt-server-macos-x86_64
+            
+          # macOS ARM64 (M1/M2)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_name: bili-ticket-gt-server
+            asset_name: bili-ticket-gt-server-macos-aarch64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross (for cross-compilation)
+      if: matrix.cross
+      run: cargo install cross --git https://github.com/cross-rs/cross
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-${{ matrix.target }}-
+          ${{ runner.os }}-cargo-
+
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libssl-dev
+
+    - name: Install cross compilation dependencies (Linux ARM64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Build with cargo
+      if: '!matrix.cross'
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Build with cross
+      if: matrix.cross
+      run: cross build --release --target ${{ matrix.target }}
+
+    - name: Strip binary (Unix)
+      if: runner.os != 'Windows'
+      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+    - name: Create artifact directory
+      run: mkdir -p artifacts
+
+    - name: Copy binary to artifacts (Unix)
+      if: runner.os != 'Windows'
+      run: cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} artifacts/${{ matrix.asset_name }}
+
+    - name: Copy binary to artifacts (Windows)
+      if: runner.os == 'Windows'
+      run: copy target\${{ matrix.target }}\release\${{ matrix.artifact_name }} artifacts\${{ matrix.asset_name }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: artifacts/${{ matrix.asset_name }}
+        retention-days: 30
+
+  # 创建 GitHub Release（仅当推送标签时）
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create checksums
+      run: |
+        cd artifacts
+        for dir in */; do
+          cd "$dir"
+          sha256sum * > checksums.txt
+          cd ..
+        done
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      run: |
+        cd artifacts
+        for dir in */; do
+          cd "$dir"
+          for file in *; do
+            echo "Uploading $file"
+            curl \
+              -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "${{ steps.create_release.outputs.upload_url }}=$(echo $file | sed 's/ /%20/g')"
+          done
+          cd ..
+        done
+
+  # 可选：Docker 构建
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download Linux x86_64 artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: bili-ticket-gt-server-linux-x86_64
+        path: .
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub (optional)
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: your-dockerhub-username/bili-ticket-gt-server
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

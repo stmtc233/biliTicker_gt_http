@@ -1,0 +1,35 @@
+# Rust 构建文件
+target/
+Cargo.lock
+
+# Git
+.git/
+.gitignore
+
+# GitHub Actions
+.github/
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# 文档
+README.md
+LICENSE
+*.md
+
+# 保留需要的二进制文件
+!bili-ticket-gt-server-linux-x86_64
