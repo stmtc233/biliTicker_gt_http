@@ -110,27 +110,39 @@ jobs:
     - name: Find and strip binary (Unix)
       if: runner.os != 'Windows'
       run: |
-        # 查找实际的二进制文件名
-        BINARY_PATH=$(find target/${{ matrix.target }}/release/ -maxdepth 1 -type f -executable -name "*ticket*" | head -n 1)
-        if [ -z "$BINARY_PATH" ]; then
+        # 查找实际的二进制文件
+        BINARY_FILE=$(find target/${{ matrix.target }}/release/ -maxdepth 1 -type f -executable -name "*ticket*" | head -n 1)
+        if [ -z "$BINARY_FILE" ]; then
           echo "Could not find binary file"
           exit 1
         fi
-        echo "Found binary at: $BINARY_PATH"
-        strip "$BINARY_PATH"
-        # 将找到的二进制文件重命名为预期的名称
-        mv "$BINARY_PATH" "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+        echo "Found binary at: $BINARY_FILE"
+        strip "$BINARY_FILE"
+        echo "BINARY_FILE=$BINARY_FILE" >> $GITHUB_ENV
+
+    - name: Find binary (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        $binaryPath = Get-ChildItem -Path "target\${{ matrix.target }}\release\" -Name "*ticket*.exe" | Select-Object -First 1
+        if (-not $binaryPath) {
+          Write-Error "Could not find binary file"
+          exit 1
+        }
+        $fullBinaryPath = "target\${{ matrix.target }}\release\$binaryPath"
+        Write-Host "Found binary at: $fullBinaryPath"
+        Add-Content -Path $env:GITHUB_ENV -Value "BINARY_FILE=$fullBinaryPath"
 
     - name: Create artifact directory
       run: mkdir -p artifacts
 
     - name: Copy binary to artifacts (Unix)
       if: runner.os != 'Windows'
-      run: cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} artifacts/${{ matrix.asset_name }}
+      run: cp "$BINARY_FILE" artifacts/${{ matrix.asset_name }}
 
     - name: Copy binary to artifacts (Windows)
       if: runner.os == 'Windows'
-      run: copy target\${{ matrix.target }}\release\${{ matrix.artifact_name }} artifacts\${{ matrix.asset_name }}
+      run: copy "$env:BINARY_FILE" artifacts\${{ matrix.asset_name }}
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
