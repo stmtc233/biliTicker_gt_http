@@ -5,8 +5,8 @@ use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
 use captcha_breaker::captcha::ChineseClick0;
-use captcha_breaker::environment::CaptchaEnvironment;    // 引入 CaptchaEnvironment
-use once_cell::sync::Lazy; // 引入 Lazy
+use captcha_breaker::environment::CaptchaEnvironment;
+use once_cell::sync::Lazy;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -15,8 +15,6 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 use crate::w::click_calculate;
 
-// --- 全局模型实例 ---
-// 使用 Lazy 来确保模型只在第一次被访问时加载一次，并且是线程安全的。
 static GLOBAL_CLICK_BREAKER: Lazy<Arc<ChineseClick0>> = Lazy::new(|| {
     println!("Loading ChineseClick0 ONNX model... This should only happen once.");
     let env = CaptchaEnvironment::default();
@@ -28,40 +26,29 @@ static GLOBAL_CLICK_BREAKER: Lazy<Arc<ChineseClick0>> = Lazy::new(|| {
 
 #[derive(Clone)]
 pub struct Click {
-    client: Client,
-    noproxy_client: Client,
+    // 修改：使用 Arc<Client> 来共享客户端实例
+    client: Arc<Client>,
+    noproxy_client: Arc<Client>,
     verify_type: VerifyType,
-    cb: Arc<ChineseClick0>, // 这个字段保持不变，它将持有对全局实例的引用
+    cb: Arc<ChineseClick0>,
 }
 
-impl Default for Click {
-    fn default() -> Self {
+// 移除 Default impl
+
+impl Click {
+    // 修改：新的构造函数，接收从 ClientManager 来的客户端
+    pub fn new(client: Arc<Client>, noproxy_client: Arc<Client>) -> Self {
         Click {
-            client: Client::new(),
-            noproxy_client: Client::new(),
+            client,
+            noproxy_client,
             verify_type: VerifyType::Click,
-            // 不再重新加载，而是克隆全局实例的 Arc 指针
             cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
         }
     }
-}
-
-impl Click {
-    pub fn new_with_proxy(proxy_url: &str) -> Result<Self> {
-        let proxy = reqwest::Proxy::all(proxy_url)
-            .map_err(|e| other("无效的代理 URL", e))?;
-        let proxied_client = Client::builder()
-            .proxy(proxy)
-            .build()
-            .map_err(|e| other("构建代理客户端失败", e))?;
-        
-        Ok(Click {
-            client: proxied_client,
-            noproxy_client: Client::new(),
-            verify_type: VerifyType::Click,
-            // 同样，克隆全局实例的 Arc 指针
-            cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
-        })
+    
+    // 新增：允许在运行时更新客户端（例如，当同一个 session 切换代理时）
+    pub fn update_client(&mut self, new_client: Arc<Client>) {
+        self.client = new_client;
     }
     
     // ... simple_match, simple_match_retry, vvv 等其他方法保持不变 ...
@@ -116,11 +103,18 @@ impl Click {
 }
 
 
-// Api, GenerateW, Test trait 的实现保持不变
-// ...
+// Api trait 的实现几乎不变，因为 &Arc<Client> 可以自动解引用为 &Client
 impl Api for Click {
     type ArgsType = String;
 
+    // ... 所有 Api trait 的方法保持不变，除了 client() 和 noproxy_client() ...
+
+    // client() 和 noproxy_client() 的实现也保持不变，Rust 的解引用机制会处理好
+    fn client(&self) -> &Client { &self.client }
+    fn noproxy_client(&self) -> &Client { &self.noproxy_client }
+    
+    // ... 其余方法 ...
+    // ... 省略未修改的代码 ...
     fn register_test(&self, url: &str) -> crate::error::Result<(String, String)> {
         let res = self.client().get(url).send().map_err(net_work_error)?;
         let res = res.json::<Value>().expect("解析失败");
@@ -269,11 +263,9 @@ impl Api for Click {
                 .ok_or_else(|| other_without_source("我真不想编错误名了"))?
         ))
     }
-
-    fn client(&self) -> &Client { &self.client }
-    fn noproxy_client(&self) -> &Client { &self.noproxy_client }
 }
-
+// GenerateW 和 Test 的 impl 保持不变...
+// ...
 impl GenerateW for Click {
     fn calculate_key(&mut self, args: Self::ArgsType) -> Result<String> {
         let pic_url = args;

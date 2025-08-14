@@ -9,46 +9,44 @@ use image::{DynamicImage, GenericImage};
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc; // 引入 Arc
 use crate::w::slide_calculate;
 
 #[derive(Clone)]
 pub struct Slide {
-    client: Client,
-    noproxy_client: Client,
+    // 修改：使用 Arc<Client>
+    client: Arc<Client>,
+    noproxy_client: Arc<Client>,
     verify_type: VerifyType,
 }
 
-impl Default for Slide {
-    fn default() -> Self {
+// 移除 Default impl
+
+impl Slide {
+    // 修改：新的构造函数
+    pub fn new(client: Arc<Client>, noproxy_client: Arc<Client>) -> Self {
         Slide {
-            client: Client::new(),
-            noproxy_client: Client::new(),
+            client,
+            noproxy_client,
             verify_type: VerifyType::Slide,
         }
     }
-}
-
-impl Slide {
-    pub fn new_with_proxy(proxy_url: &str) -> Result<Self> {
-        // 修复：使用 Proxy::all
-        let proxy = reqwest::Proxy::all(proxy_url)
-            .map_err(|e| other("无效的代理 URL", e))?;
-        let proxied_client = Client::builder()
-            .proxy(proxy)
-            .build()
-            .map_err(|e| other("构建代理客户端失败", e))?;
-        
-        Ok(Slide {
-            client: proxied_client,
-            noproxy_client: Client::new(),
-            verify_type: VerifyType::Slide,
-        })
+    
+    // 新增：允许在运行时更新客户端
+    pub fn update_client(&mut self, new_client: Arc<Client>) {
+        self.client = new_client;
     }
 }
 
 impl Api for Slide {
     type ArgsType = (String, String, String, String);
 
+    // ... 其他 Api 方法不变 ...
+
+    fn client(&self) -> &Client { &self.client }
+    fn noproxy_client(&self) -> &Client { &self.noproxy_client }
+    // ... 省略未修改的代码 ...
+    // ...
     fn get_new_c_s_args(&self, gt: &str, challenge: &str) -> Result<(Vec<u8>, String, Self::ArgsType)> {
         let url = "http://api.geevisit.com/get.php";
         let mut params = HashMap::from([
@@ -128,11 +126,9 @@ impl Api for Slide {
     fn refresh(&self, _gt: &str, _challenge: &str) -> Result<Self::ArgsType> {
         todo!("{}", "暂时不写")
     }
-
-    fn client(&self) -> &Client { &self.client }
-    fn noproxy_client(&self) -> &Client { &self.noproxy_client }
 }
-
+// GenerateW 和 Test 的 impl 保持不变...
+// ...
 impl GenerateW for Slide {
     fn calculate_key(&mut self, args: Self::ArgsType) -> Result<String> {
         let (_, _, bg, slice) = args;
