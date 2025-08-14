@@ -28,32 +28,32 @@ jobs:
           # Linux x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: bili-ticket-gt-server
+            artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-linux-x86_64
             
           # Linux ARM64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: bili-ticket-gt-server
+            artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-linux-aarch64
             cross: true
             
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: bili-ticket-gt-server.exe
+            artifact_name: bili_ticket_gt_server.exe
             asset_name: bili-ticket-gt-server-windows-x86_64.exe
             
           # macOS x86_64
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact_name: bili-ticket-gt-server
+            artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-macos-x86_64
             
           # macOS ARM64 (M1/M2)
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: bili-ticket-gt-server
+            artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-macos-aarch64
 
     steps:
@@ -102,9 +102,24 @@ jobs:
       if: matrix.cross
       run: cross build --release --target ${{ matrix.target }}
 
-    - name: Strip binary (Unix)
+    - name: List build artifacts (debug)
+      run: |
+        echo "Contents of target/${{ matrix.target }}/release/:"
+        ls -la target/${{ matrix.target }}/release/ || echo "Directory not found"
+
+    - name: Find and strip binary (Unix)
       if: runner.os != 'Windows'
-      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      run: |
+        # 查找实际的二进制文件名
+        BINARY_PATH=$(find target/${{ matrix.target }}/release/ -maxdepth 1 -type f -executable -name "*ticket*" | head -n 1)
+        if [ -z "$BINARY_PATH" ]; then
+          echo "Could not find binary file"
+          exit 1
+        fi
+        echo "Found binary at: $BINARY_PATH"
+        strip "$BINARY_PATH"
+        # 将找到的二进制文件重命名为预期的名称
+        mv "$BINARY_PATH" "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
 
     - name: Create artifact directory
       run: mkdir -p artifacts

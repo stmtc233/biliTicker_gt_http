@@ -14,11 +14,11 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 WORKDIR /app
 
 # 复制编译好的二进制文件
-COPY bili-ticket-gt-server-linux-x86_64 /app/bili-ticket-gt-server
+COPY bili-ticket-gt-server-linux-x86_64 /app/bili_ticket_gt_server
 
 # 设置权限
-RUN chmod +x /app/bili-ticket-gt-server && \
-    chown appuser:appuser /app/bili-ticket-gt-server
+RUN chmod +x /app/bili_ticket_gt_server && \
+    chown appuser:appuser /app/bili_ticket_gt_server
 
 # 切换到非 root 用户
 USER appuser
@@ -31,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
 # 启动应用
-CMD ["./bili-ticket-gt-server"]
+CMD ["./bili_ticket_gt_server"]
