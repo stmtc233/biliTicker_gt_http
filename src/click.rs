@@ -150,7 +150,7 @@ impl Api for Click {
             .to_string();
         let callback = format!("geetest_{}", timestamp);
 
-        let url = "http://api.geevisit.com/get.php";
+        let url = "http://api.geetest.com/get.php";
         let mut params = HashMap::from([
             ("gt", gt),
             ("challenge", challenge),
@@ -158,7 +158,16 @@ impl Api for Click {
             ("offline", "false"),
             ("isPC", "true"),
             ("callback", callback.as_str()), // 使用动态回调
+            ("type", "click"),
+            ("lang", "zh-cn"),
+            ("https", "false"),
+            ("protocol", "https://"), 
+            ("product", "embed"),
+            ("api_server", "api.geetest.com"),
+            ("autoReset", "true"),
+            ("width", "100%"), 
         ]);
+
         params.insert(
             "type",
             match self.verify_type {
@@ -231,10 +240,13 @@ impl Api for Click {
             .to_string();
         let callback = format!("geetest_{}", timestamp);
 
-        let url = "http://api.geevisit.com/ajax.php";
+        let url = "http://api.geetest.com/ajax.php";
         let mut params = HashMap::from([
             ("gt", gt),
             ("challenge", challenge),
+            ("lang", "zh-cn"),
+            ("pt", "0"),
+            ("client_type", "web"),
             ("callback", callback.as_str()), // 使用动态回调
         ]);
         if let Some(w) = w {
@@ -283,7 +295,7 @@ impl Api for Click {
             .to_string();
         let callback = format!("geetest_{}", timestamp);
 
-        let url = "http://api.geevisit.com/refresh.php";
+        let url = "http://api.geetest.com/refresh.php";
         let params = HashMap::from([
             ("gt", gt),
             ("challenge", challenge),
