@@ -29,43 +29,57 @@ use crate::abstraction::{Api, GenerateW, Test, VerifyType};
 use crate::click::Click;
 use crate::slide::Slide;
 
-// --- 结构体定义、ClientManager、AppState 等部分保持不变 ---
-// ... (此处省略，与之前版本相同) ...
 #[derive(Clone)]
 struct ClientManager {
     clients: Arc<Mutex<HashMap<String, Arc<Client>>>>,
 }
+
+// --- 修改开始 ---
+
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
+
 impl ClientManager {
     fn new() -> Self {
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
     fn get(&self, proxy: Option<&str>, user_agent: Option<&str>) -> Result<Arc<Client>, crate::error::Error> {
         let proxy_key = proxy.unwrap_or("no_proxy");
-        let ua_key = user_agent.unwrap_or("default_ua");
+        // 使用传入的 user_agent 或默认值来生成缓存键
+        let ua_key = user_agent.unwrap_or(DEFAULT_USER_AGENT);
         let key = format!("{}|{}", proxy_key, ua_key);
+
         let mut clients = self.clients.lock().expect("ClientManager mutex poisoned");
         if let Some(client) = clients.get(&key) {
             return Ok(Arc::clone(client));
         }
-        let mut client_builder = Client::builder();
+
+        // 确定要设置到客户端上的 User-Agent
+        let ua_to_set = user_agent.unwrap_or(DEFAULT_USER_AGENT);
+
+        let mut client_builder = Client::builder()
+            .user_agent(ua_to_set); // 总是设置 User-Agent
+
         if let Some(proxy_url) = proxy {
             let proxy = reqwest::Proxy::all(proxy_url)
                 .map_err(|e| error::other("无效的代理 URL", e))?;
             client_builder = client_builder.proxy(proxy);
         }
-        if let Some(ua) = user_agent {
-            client_builder = client_builder.user_agent(ua);
-        }
+
         let new_client = client_builder
             .build()
             .map_err(|e| error::other("构建客户端失败", e))?;
+
         let client_arc = Arc::new(new_client);
         clients.insert(key, Arc::clone(&client_arc));
         Ok(client_arc)
     }
 }
+
+// --- 修改结束 ---
+
 #[derive(Clone)]
 struct AppState {
     client_manager: ClientManager,
@@ -175,6 +189,7 @@ fn get_click_instance(
     let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
+    // noproxy_client 现在也会有一个默认的 User-Agent
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
          (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
@@ -198,6 +213,7 @@ fn get_slide_instance(
     let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
+    // noproxy_client 现在也会有一个默认的 User-Agent
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
          (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
@@ -260,7 +276,7 @@ macro_rules! handle_blocking_call {
 }
 
 
-// --- API 处理函数 (已全部清理) ---
+// --- API 处理函数 (保持不变) ---
 async fn click_simple_match(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
