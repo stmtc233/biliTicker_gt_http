@@ -1,8 +1,10 @@
 // main.rs
 
 use axum::{
+    body::{Body, Bytes},
     extract::State,
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -14,12 +16,9 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task;
 use tower::ServiceBuilder;
-// 新增：引入 tower_http 的日志中间件
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-// 新增：引入 tracing 和 tracing_subscriber 用于日志记录
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-// 引入你的模块
 mod abstraction;
 mod click;
 mod error;
@@ -30,12 +29,12 @@ use crate::abstraction::{Api, GenerateW, Test, VerifyType};
 use crate::click::Click;
 use crate::slide::Slide;
 
-// --- ClientManager (未改变) ---
+// --- 结构体定义、ClientManager、AppState 等部分保持不变 ---
+// ... (此处省略，与之前版本相同) ...
 #[derive(Clone)]
 struct ClientManager {
     clients: Arc<Mutex<HashMap<String, Arc<Client>>>>,
 }
-
 impl ClientManager {
     fn new() -> Self {
         Self {
@@ -67,15 +66,12 @@ impl ClientManager {
         Ok(client_arc)
     }
 }
-
-// --- AppState (未改变) ---
 #[derive(Clone)]
 struct AppState {
     client_manager: ClientManager,
     click_instances: Arc<Mutex<HashMap<String, Click>>>,
     slide_instances: Arc<Mutex<HashMap<String, Slide>>>,
 }
-
 impl AppState {
     fn new() -> Self {
         Self {
@@ -85,8 +81,6 @@ impl AppState {
         }
     }
 }
-
-// --- 请求和响应结构体 (未改变) ---
 #[derive(Deserialize)]
 struct SimpleMatchRequest {
     gt: String,
@@ -95,7 +89,6 @@ struct SimpleMatchRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct RegisterTestRequest {
     url: String,
@@ -103,7 +96,6 @@ struct RegisterTestRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct GetCSRequest {
     gt: String,
@@ -113,7 +105,6 @@ struct GetCSRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct GetTypeRequest {
     gt: String,
@@ -123,7 +114,6 @@ struct GetTypeRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct VerifyRequest {
     gt: String,
@@ -133,7 +123,6 @@ struct VerifyRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct GenerateWRequest {
     key: String,
@@ -145,7 +134,6 @@ struct GenerateWRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Deserialize)]
 struct TestRequest {
     url: String,
@@ -153,26 +141,22 @@ struct TestRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-
 #[derive(Serialize)]
 struct ApiResponse<T> {
     success: bool,
     data: Option<T>,
     error: Option<String>,
 }
-
 #[derive(Serialize)]
 struct TupleResponse2 {
     first: String,
     second: String,
 }
-
 #[derive(Serialize)]
 struct CSResponse {
     c: Vec<u8>,
     s: String,
 }
-
 impl<T> ApiResponse<T> {
     fn success(data: T) -> Self {
         Self { success: true, data: Some(data), error: None }
@@ -181,8 +165,6 @@ impl<T> ApiResponse<T> {
         Self { success: false, data: None, error: Some(message) }
     }
 }
-
-// --- 实例获取函数 (未改变) ---
 fn get_click_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -206,7 +188,6 @@ fn get_click_instance(
     instance.update_client(Arc::clone(&configured_client));
     Ok(instance.clone())
 }
-
 fn get_slide_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -231,7 +212,31 @@ fn get_slide_instance(
     Ok(instance.clone())
 }
 
-// --- 宏 (未改变) ---
+// 新增：一个记录请求体的中间件
+async fn log_request_body(req: Request<Body>, next: Next) -> Result<Response, StatusCode> {
+    let (parts, body) = req.into_parts();
+
+    if parts.method == "POST" {
+        let bytes = match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::error!("无法读取请求 body: {}", err);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        };
+        if let Ok(body_str) = std::str::from_utf8(&bytes) {
+            tracing::info!(method = %parts.method, uri = %parts.uri, body = %body_str, "收到请求");
+        } else {
+            tracing::info!(method = %parts.method, uri = %parts.uri, body = "[非 UTF-8 数据]", "收到请求");
+        }
+        let req = Request::from_parts(parts, Body::from(bytes));
+        Ok(next.run(req).await)
+    } else {
+        let req = Request::from_parts(parts, body);
+        Ok(next.run(req).await)
+    }
+}
+
 macro_rules! handle_blocking_call {
     ($instance_result:expr, $block:expr) => {
         {
@@ -242,12 +247,10 @@ macro_rules! handle_blocking_call {
             match task::spawn_blocking(move || $block(&mut instance)).await {
                 Ok(Ok(data)) => Json(ApiResponse::success(data)).into_response(),
                 Ok(Err(e)) => {
-                    // 新增：在返回错误时记录日志
                     tracing::error!("业务逻辑错误: {}", e);
                     (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
                 },
                 Err(e) => {
-                    // 新增：在返回错误时记录日志
                     tracing::error!("Tokio 任务执行错误: {}", e);
                     (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
                 },
@@ -257,38 +260,28 @@ macro_rules! handle_blocking_call {
 }
 
 
-// --- API 处理函数 (已修改) ---
-// 增加了具体的参数日志
+// --- API 处理函数 (已全部清理) ---
 async fn click_simple_match(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
-    // 新增：记录请求参数
-    tracing::info!(
-        gt = %req.gt,
-        challenge = %req.challenge,
-        session_id = ?req.session_id,
-        "收到 /click/simple_match 请求"
-    );
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match(&req.gt, &req.challenge)
     )
 }
 
-// ... 省略其他处理函数，你可以按需为它们也加上类似的具体日志 ...
-
-// --- 为了简洁，这里只为一个 handler 添加了详细日志作为示例 ---
-// --- 其他 handler 保持原样，但它们仍然会被 TraceLayer 中间件记录 ---
 async fn click_simple_match_retry(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match_retry(&req.gt, &req.challenge)
     )
 }
+
 async fn click_register_test(State(state): State<AppState>, Json(req): Json<RegisterTestRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
+
 async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -296,6 +289,7 @@ async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSReque
         move |instance: &mut Click| instance.get_c_s(&req.gt, &req.challenge, w_owned.as_deref()).map(|(c, s)| CSResponse { c, s })
     )
 }
+
 async fn click_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -306,6 +300,7 @@ async fn click_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRe
         })
     )
 }
+
 async fn click_verify(State(state): State<AppState>, Json(req): Json<VerifyRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -313,24 +308,28 @@ async fn click_verify(State(state): State<AppState>, Json(req): Json<VerifyReque
         move |instance: &mut Click| instance.verify(&req.gt, &req.challenge, w_owned.as_deref()).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
+
 async fn click_generate_w(State(state): State<AppState>, Json(req): Json<GenerateWRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.generate_w(&req.key, &req.gt, &req.challenge, &req.c, &req.s)
     )
 }
+
 async fn click_test(State(state): State<AppState>, Json(req): Json<TestRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.test(&req.url)
     )
 }
+
 async fn slide_register_test(State(state): State<AppState>, Json(req): Json<RegisterTestRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Slide| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
+
 async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -338,6 +337,7 @@ async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSReque
         move |instance: &mut Slide| instance.get_c_s(&req.gt, &req.challenge, w_owned.as_deref()).map(|(c, s)| CSResponse { c, s })
     )
 }
+
 async fn slide_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -348,6 +348,7 @@ async fn slide_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRe
         })
     )
 }
+
 async fn slide_verify(State(state): State<AppState>, Json(req): Json<VerifyRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
@@ -355,12 +356,14 @@ async fn slide_verify(State(state): State<AppState>, Json(req): Json<VerifyReque
         move |instance: &mut Slide| instance.verify(&req.gt, &req.challenge, w_owned.as_deref()).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
+
 async fn slide_generate_w(State(state): State<AppState>, Json(req): Json<GenerateWRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Slide| instance.generate_w(&req.key, &req.gt, &req.challenge, &req.c, &req.s)
     )
 }
+
 async fn slide_test(State(state): State<AppState>, Json(req): Json<TestRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -374,18 +377,16 @@ async fn health_check() -> &'static str {
 
 #[tokio::main]
 async fn main() {
-    // 新增：初始化 tracing 日志系统
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "bili_ticket_gt_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "bili_ticket_gt_server=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let state = AppState::new();
     
-    // 修改：将日志中间件添加到 Router
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/click/simple_match", post(click_simple_match))
@@ -404,16 +405,15 @@ async fn main() {
         .route("/slide/test", post(slide_test))
         .layer(
             ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http()) // 这是自动记录请求信息的中间件
+                .layer(TraceLayer::new_for_http())
+                .layer(middleware::from_fn(log_request_body)) // 应用日志中间件
                 .layer(CorsLayer::permissive()),
         )
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     
-    // 新增：在启动时打印一条 info 日志
     tracing::info!("服务已启动于 http://0.0.0.0:3000");
-
-    // 修改：移除旧的 println! 启动信息
+    
     axum::serve(listener, app).await.unwrap();
 }
