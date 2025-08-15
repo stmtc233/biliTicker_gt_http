@@ -3,17 +3,17 @@ name = "bili_ticket_gt_server"
 version = "0.3.2"
 edition = "2021"
 
-# 注释掉原来的 Python 绑定配置
-# [lib]
-# name = "bili_ticket_gt_python"
-# crate-type = ["cdylib"]
-
 [dependencies]
 # HTTP 服务相关依赖
 axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
+# 修改：为 tower-http 添加 "trace" 特性以支持日志中间件
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# 新增：日志记录相关依赖
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 保留原有的业务逻辑依赖
 reqwest = {version = "0.12", features = ["blocking", "json"]}
@@ -27,8 +27,6 @@ hex = "0.4"
 soft-aes = "0.2"
 md5 = "0.7"
 once_cell = "1.19"
-# 移除 pyo3 依赖，因为我们不再需要 Python 绑定
-# pyo3 = { version = "0.23.5", features = ["auto-initialize", "extension-module"]}
 
 [patch.crates-io]
 ort = { git="https://github.com/biliticket/ort" }
