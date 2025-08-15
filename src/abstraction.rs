@@ -170,7 +170,8 @@ pub(crate) trait Api {
     fn download_img(&self, img_url: &str) -> Result<Vec<u8>> {
         // 使用不带代理的客户端
         let res = self
-            .noproxy_client()
+            // .noproxy_client()
+            .client()
             .get(img_url)
             .send()
             .map_err(net_work_error)?;
