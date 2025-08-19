@@ -427,9 +427,9 @@ async fn main() {
         )
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = TcpListener::bind("[::]:3000").await.unwrap();
     
-    tracing::info!("服务已启动于 http://0.0.0.0:3000");
+    tracing::info!("服务已启动于 http://[::]:3000");
     
     axum::serve(listener, app).await.unwrap();
 }
