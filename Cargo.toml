@@ -27,6 +27,7 @@ hex = "0.4"
 soft-aes = "0.2"
 md5 = "0.7"
 once_cell = "1.19"
+lru = "0.12"
 
 [patch.crates-io]
 ort = { git="https://github.com/biliticket/ort" }

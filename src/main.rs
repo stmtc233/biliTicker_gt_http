@@ -10,8 +10,10 @@ use axum::{
     Router,
 };
 use reqwest::blocking::Client;
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task;
@@ -83,15 +85,16 @@ impl ClientManager {
 #[derive(Clone)]
 struct AppState {
     client_manager: ClientManager,
-    click_instances: Arc<Mutex<HashMap<String, Click>>>,
-    slide_instances: Arc<Mutex<HashMap<String, Slide>>>,
+    click_instances: Arc<Mutex<LruCache<String, Click>>>,
+    slide_instances: Arc<Mutex<LruCache<String, Slide>>>,
 }
 impl AppState {
     fn new() -> Self {
+        let cache_size = NonZeroUsize::new(1024).unwrap();
         Self {
             client_manager: ClientManager::new(),
-            click_instances: Arc::new(Mutex::new(HashMap::new())),
-            slide_instances: Arc::new(Mutex::new(HashMap::new())),
+            click_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            slide_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
         }
     }
 }
@@ -197,11 +200,13 @@ fn get_click_instance(
         Ok(guard) => guard,
         Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error("内部服务错误: Mutex poisoned".to_string()))).into_response()),
     };
-    let instance = instances
-        .entry(session_id)
-        .or_insert_with(|| Click::new(Arc::clone(&configured_client), Arc::clone(&noproxy_client)));
-    instance.update_client(Arc::clone(&configured_client));
-    Ok(instance.clone())
+    if let Some(instance) = instances.get_mut(&session_id) {
+        instance.update_client(Arc::clone(&configured_client));
+        return Ok(instance.clone());
+    }
+    let new_instance = Click::new(Arc::clone(&configured_client), Arc::clone(&noproxy_client));
+    instances.put(session_id, new_instance.clone());
+    Ok(new_instance)
 }
 fn get_slide_instance(
     state: &AppState,
@@ -221,11 +226,13 @@ fn get_slide_instance(
         Ok(guard) => guard,
         Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error("内部服务错误: Mutex poisoned".to_string()))).into_response()),
     };
-    let instance = instances
-        .entry(session_id)
-        .or_insert_with(|| Slide::new(Arc::clone(&configured_client), Arc::clone(&noproxy_client)));
-    instance.update_client(Arc::clone(&configured_client));
-    Ok(instance.clone())
+    if let Some(instance) = instances.get_mut(&session_id) {
+        instance.update_client(Arc::clone(&configured_client));
+        return Ok(instance.clone());
+    }
+    let new_instance = Slide::new(Arc::clone(&configured_client), Arc::clone(&noproxy_client));
+    instances.put(session_id, new_instance.clone());
+    Ok(new_instance)
 }
 
 // 新增：一个记录请求体的中间件
