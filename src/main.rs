@@ -90,7 +90,7 @@ struct AppState {
 }
 impl AppState {
     fn new() -> Self {
-        let cache_size = NonZeroUsize::new(1024).unwrap();
+        let cache_size = NonZeroUsize::new(127).unwrap();
         Self {
             client_manager: ClientManager::new(),
             click_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
