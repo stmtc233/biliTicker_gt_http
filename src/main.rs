@@ -10,6 +10,7 @@ use axum::{
     Router,
 };
 use reqwest::blocking::Client;
+use std::time::Duration;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -62,7 +63,21 @@ impl ClientManager {
         let ua_to_set = user_agent.unwrap_or(DEFAULT_USER_AGENT);
 
         let mut client_builder = Client::builder()
-            .user_agent(ua_to_set); // 总是设置 User-Agent
+            .user_agent(ua_to_set)
+            // 设置连接超时
+            .connect_timeout(Duration::from_secs(10))
+            // 设置请求超时
+            .timeout(Duration::from_secs(30))
+            // 设置连接池大小限制
+            .pool_max_idle_per_host(10)
+            // 设置连接池空闲超时
+            .pool_idle_timeout(Duration::from_secs(30))
+            // 启用TCP keepalive
+            .tcp_keepalive(Duration::from_secs(60))
+            // 启用HTTP/2
+            .http2_prior_knowledge()
+            // 设置最大连接数
+            .connection_verbose(true);
 
         if let Some(proxy_url) = proxy {
             let proxy = reqwest::Proxy::all(proxy_url)
