@@ -9,6 +9,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
+
+
+use tokio::net::TcpListener;
+use tower_http::trace::TraceLayer;
 use reqwest::blocking::Client;
 use std::time::Duration;
 use lru::LruCache;
@@ -16,10 +20,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use tokio::net::TcpListener;
 use tokio::task;
 use tower::ServiceBuilder;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod abstraction;
@@ -455,10 +458,9 @@ async fn main() {
     // 3. 并行运行两个服务
     // tokio::try_join! 会同时运行两个 future，如果其中任何一个出错，它会立即返回错误。
     if let Err(e) = tokio::try_join!(
-        axum::serve(listener_v4, app).into_make_service(),
-        axum::serve(listener_v6, app_v6).into_make_service()
+        axum::serve(listener_v4, app),
+        axum::serve(listener_v6, app_v6)
     ) {
         tracing::error!("启动一个或多个监听器失败: {}", e);
     }
 }
-
