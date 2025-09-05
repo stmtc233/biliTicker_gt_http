@@ -441,9 +441,24 @@ async fn main() {
         )
         .with_state(state);
 
-    let listener = TcpListener::bind("[::]:3000").await.unwrap();
+    let listener_v4 = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    tracing::info!("服务已启动于 http://0.0.0.0:3000");
     
+    // 监听所有 IPv6 地址
+    let listener_v6 = TcpListener::bind("[::]:3000").await.unwrap();
     tracing::info!("服务已启动于 http://[::]:3000");
-    
-    axum::serve(listener, app).await.unwrap();
+
+    // 2. 将同一个 app 服务于两个监听器
+    // 我们需要克隆 app，因为每个 serve 调用都会取得其所有权
+    let app_v6 = app.clone();
+
+    // 3. 并行运行两个服务
+    // tokio::try_join! 会同时运行两个 future，如果其中任何一个出错，它会立即返回错误。
+    if let Err(e) = tokio::try_join!(
+        axum::serve(listener_v4, app).into_make_service(),
+        axum::serve(listener_v6, app_v6).into_make_service()
+    ) {
+        tracing::error!("启动一个或多个监听器失败: {}", e);
+    }
 }
+
