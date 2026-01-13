@@ -1,7 +1,7 @@
 // main.rs
 
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     extract::State,
     http::{Request, StatusCode},
     middleware::{self, Next},
@@ -9,7 +9,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-
 
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -39,8 +38,6 @@ use crate::slide::Slide;
 struct ClientManager {
     clients: Arc<Mutex<HashMap<String, Arc<Client>>>>,
 }
-
-// --- 修改开始 ---
 
 const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
 
@@ -90,14 +87,13 @@ impl ClientManager {
     }
 }
 
-// --- 修改结束 ---
-
 #[derive(Clone)]
 struct AppState {
     client_manager: ClientManager,
     click_instances: Arc<Mutex<LruCache<String, Click>>>,
     slide_instances: Arc<Mutex<LruCache<String, Slide>>>,
 }
+
 impl AppState {
     fn new() -> Self {
         let cache_size = NonZeroUsize::new(127).unwrap();
@@ -108,48 +104,26 @@ impl AppState {
         }
     }
 }
+
+// 统一请求结构体
 #[derive(Deserialize)]
-struct SimpleMatchRequest {
+struct CommonRequest {
     gt: String,
     challenge: String,
+    w: Option<String>,
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
 }
+
 #[derive(Deserialize)]
-struct RegisterTestRequest {
+struct UrlRequest {
     url: String,
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-#[derive(Deserialize)]
-struct GetCSRequest {
-    gt: String,
-    challenge: String,
-    w: Option<String>,
-    session_id: Option<String>,
-    proxy: Option<String>,
-    user_agent: Option<String>,
-}
-#[derive(Deserialize)]
-struct GetTypeRequest {
-    gt: String,
-    challenge: String,
-    w: Option<String>,
-    session_id: Option<String>,
-    proxy: Option<String>,
-    user_agent: Option<String>,
-}
-#[derive(Deserialize)]
-struct VerifyRequest {
-    gt: String,
-    challenge: String,
-    w: Option<String>,
-    session_id: Option<String>,
-    proxy: Option<String>,
-    user_agent: Option<String>,
-}
+
 #[derive(Deserialize)]
 struct GenerateWRequest {
     key: String,
@@ -161,29 +135,26 @@ struct GenerateWRequest {
     proxy: Option<String>,
     user_agent: Option<String>,
 }
-#[derive(Deserialize)]
-struct TestRequest {
-    url: String,
-    session_id: Option<String>,
-    proxy: Option<String>,
-    user_agent: Option<String>,
-}
+
 #[derive(Serialize)]
 struct ApiResponse<T> {
     success: bool,
     data: Option<T>,
     error: Option<String>,
 }
+
 #[derive(Serialize)]
 struct TupleResponse2 {
     first: String,
     second: String,
 }
+
 #[derive(Serialize)]
 struct CSResponse {
     c: Vec<u8>,
     s: String,
 }
+
 impl<T> ApiResponse<T> {
     fn success(data: T) -> Self {
         Self { success: true, data: Some(data), error: None }
@@ -192,6 +163,7 @@ impl<T> ApiResponse<T> {
         Self { success: false, data: None, error: Some(message) }
     }
 }
+
 fn get_click_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -202,7 +174,6 @@ fn get_click_instance(
     let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
-    // noproxy_client 现在也会有一个默认的 User-Agent
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
          (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
@@ -218,6 +189,7 @@ fn get_click_instance(
     instances.put(session_id, new_instance.clone());
     Ok(new_instance)
 }
+
 fn get_slide_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -228,7 +200,6 @@ fn get_slide_instance(
     let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
-    // noproxy_client 现在也会有一个默认的 User-Agent
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
          (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
     })?;
@@ -293,29 +264,30 @@ macro_rules! handle_blocking_call {
 }
 
 
-// --- API 处理函数 (保持不变) ---
-async fn click_simple_match(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
+// --- API 处理函数 ---
+
+async fn click_simple_match(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match(&req.gt, &req.challenge)
     )
 }
 
-async fn click_simple_match_retry(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
+async fn click_simple_match_retry(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match_retry(&req.gt, &req.challenge)
     )
 }
 
-async fn click_register_test(State(state): State<AppState>, Json(req): Json<RegisterTestRequest>) -> Response {
+async fn click_register_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
 
-async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSRequest>) -> Response {
+async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -323,7 +295,7 @@ async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSReque
     )
 }
 
-async fn click_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRequest>) -> Response {
+async fn click_get_type(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -334,7 +306,7 @@ async fn click_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRe
     )
 }
 
-async fn click_verify(State(state): State<AppState>, Json(req): Json<VerifyRequest>) -> Response {
+async fn click_verify(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -349,21 +321,21 @@ async fn click_generate_w(State(state): State<AppState>, Json(req): Json<Generat
     )
 }
 
-async fn click_test(State(state): State<AppState>, Json(req): Json<TestRequest>) -> Response {
+async fn click_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.test(&req.url)
     )
 }
 
-async fn slide_register_test(State(state): State<AppState>, Json(req): Json<RegisterTestRequest>) -> Response {
+async fn slide_register_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Slide| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
 
-async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSRequest>) -> Response {
+async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -371,7 +343,7 @@ async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<GetCSReque
     )
 }
 
-async fn slide_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRequest>) -> Response {
+async fn slide_get_type(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -382,7 +354,7 @@ async fn slide_get_type(State(state): State<AppState>, Json(req): Json<GetTypeRe
     )
 }
 
-async fn slide_verify(State(state): State<AppState>, Json(req): Json<VerifyRequest>) -> Response {
+async fn slide_verify(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
@@ -397,21 +369,19 @@ async fn slide_generate_w(State(state): State<AppState>, Json(req): Json<Generat
     )
 }
 
-async fn slide_test(State(state): State<AppState>, Json(req): Json<TestRequest>) -> Response {
+async fn slide_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Slide| instance.test(&req.url)
     )
 }
 
-// --- 新增处理器 ---
-async fn slide_simple_match(State(state): State<AppState>, Json(req): Json<SimpleMatchRequest>) -> Response {
+async fn slide_simple_match(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Slide| instance.simple_match(&req.gt, &req.challenge).map(|(f, s)| TupleResponse2 { first: f, second: s })
     )
 }
-// --- 新增处理器结束 ---
 
 async fn health_check() -> &'static str {
     "OK"
@@ -455,23 +425,53 @@ async fn main() {
         )
         .with_state(state);
 
-    let listener_v4 = TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    tracing::info!("服务已启动于 http://0.0.0.0:3000");
-    
-    // 监听所有 IPv6 地址
-    let listener_v6 = TcpListener::bind("[::]:3000").await.unwrap();
-    tracing::info!("服务已启动于 http://[::]:3000");
+    // 尝试安全地绑定 IPv6 和 IPv4
+    let mut tasks = Vec::new();
 
-    // 2. 将同一个 app 服务于两个监听器
-    // 我们需要克隆 app，因为每个 serve 调用都会取得其所有权
-    let app_v6 = app.clone();
+    // 尝试绑定 IPv6 (可能是双栈)
+    match TcpListener::bind("[::]:3000").await {
+        Ok(listener_v6) => {
+            tracing::info!("服务已启动于 http://[::]:3000");
+            let app_v6 = app.clone();
+            tasks.push(tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener_v6, app_v6).await {
+                    tracing::error!("IPv6 服务错误: {}", e);
+                }
+            }));
+        }
+        Err(e) => {
+            tracing::warn!("无法绑定 IPv6 端口: {}", e);
+        }
+    }
 
-    // 3. 并行运行两个服务
-    // tokio::try_join! 会同时运行两个 future，如果其中任何一个出错，它会立即返回错误。
-    if let Err(e) = tokio::try_join!(
-        axum::serve(listener_v4, app),
-        axum::serve(listener_v6, app_v6)
-    ) {
-        tracing::error!("启动一个或多个监听器失败: {}", e);
+    // 尝试绑定 IPv4
+    match TcpListener::bind("0.0.0.0:3000").await {
+        Ok(listener_v4) => {
+            tracing::info!("服务已启动于 http://0.0.0.0:3000");
+            tasks.push(tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener_v4, app).await {
+                    tracing::error!("IPv4 服务错误: {}", e);
+                }
+            }));
+        }
+        Err(e) => {
+            // 如果是因为端口被占用，且我们已经绑定了 IPv6，这可能意味着 IPv6 绑定已经覆盖了 IPv4（双栈模式）
+            // 在这种情况下，我们可以认为服务已经成功启动
+            if e.kind() == std::io::ErrorKind::AddrInUse && !tasks.is_empty() {
+                tracing::info!("IPv4 端口绑定失败 (AddressInUse)，假设 IPv6 监听器已处理 IPv4 流量。");
+            } else {
+                tracing::error!("无法绑定 IPv4 端口: {}", e);
+            }
+        }
+    }
+
+    if tasks.is_empty() {
+        tracing::error!("无法绑定任何端口，服务启动失败！");
+        std::process::exit(1);
+    }
+
+    // 等待所有任务完成
+    for task in tasks {
+        let _ = task.await;
     }
 }

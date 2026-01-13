@@ -4,7 +4,6 @@ use rsa::{BigUint, RsaPublicKey, Pkcs1v15Encrypt};
 use rand::rngs::OsRng;
 use serde_json::{json};
 use soft_aes::aes::aes_enc_cbc;
-use md5;
 
 const RSA_N: &str = "00C1E3934D1614465B33053E7F48EE4EC87B14B95EF88947713D25EECBFF7E74C7977D02DC1D9451F79DD5D1C10C29ACB6A9B4D6FB7D0A0279B6719E1772565F09AF627715919221AEF91899CAE08C0D686D748B20A3603BE2318CA6BC2B59706592A9219D0BF05C9F65023A21D2330807252AE0066D59CEEFA5F2748EA80BAB81";
 const RSA_E: &str = "010001";
@@ -226,7 +225,7 @@ fn get_slide_track(distance: i32) -> Vec<Vec<i32>> {
 
 fn track_encrypt(track: &Vec<Vec<i32>>) -> String {
     // 轨迹处理函数
-    fn process_track(track: &Vec<Vec<i32>>) -> Vec<Vec<i32>> {
+    fn process_track(track: &[Vec<i32>]) -> Vec<Vec<i32>> {
         let mut result = Vec::new();
         let mut o = 0;
         let mut e;
@@ -267,7 +266,7 @@ fn track_encrypt(track: &Vec<Vec<i32>>) -> String {
         let n = e.len() as i32;
         let mut r = String::new();
 
-        let i = t.abs() as usize;
+        let i = t.unsigned_abs() as usize;
         let o_val = i as i32 / n;
         let mut o = if o_val >= n { n - 1 } else { o_val } as usize;
 
@@ -304,7 +303,7 @@ fn track_encrypt(track: &Vec<Vec<i32>>) -> String {
     }
 
     // 元素处理函数
-    fn process_element(item: &Vec<i32>, r: &mut String, i: &mut String, o: &mut String) {
+    fn process_element(item: &[i32], r: &mut String, i: &mut String, o: &mut String) {
         if let Some(c) = encode_pair(&item[0..2]) {
             i.push(c);
         } else {
@@ -407,7 +406,7 @@ fn user_response(key: i32, challenge: &str) -> String {
 
         if f >= weights[d] {
             // 安全访问第一个元素
-            if let Some(&char) = underscores[d].get(0) {
+            if let Some(&char) = underscores[d].first() {
                 result.push(char);
                 f -= weights[d];
             } else {

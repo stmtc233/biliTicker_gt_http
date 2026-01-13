@@ -205,7 +205,7 @@ impl Api for Click {
             .ok_or_else(|| missing_param("static_servers"))?
             .as_array()
             .ok_or_else(|| missing_param("static_servers"))?
-            .get(0)
+            .first()
             .ok_or_else(|| other_without_source("static_servers里面咋没东西啊"))?
             .as_str()
             .ok_or_else(|| other_without_source("static_servers里面咋没东西啊"))?;
@@ -324,7 +324,7 @@ impl Api for Click {
             .ok_or_else(|| missing_param("image_servers"))?
             .as_array()
             .ok_or_else(|| missing_param("image_servers"))?
-            .get(0)
+            .first()
             .ok_or_else(|| other_without_source("image_servers里面咋没东西啊"))?
             .as_str()
             .ok_or_else(|| other_without_source("image_servers里面咋没东西啊"))?;

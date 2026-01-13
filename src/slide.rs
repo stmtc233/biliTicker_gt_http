@@ -134,7 +134,7 @@ impl Api for Slide {
             .ok_or_else(|| missing_param("static_servers"))?
             .as_array()
             .ok_or_else(|| missing_param("static_servers"))?
-            .get(0)
+            .first()
             .ok_or_else(|| other_without_source("static_servers里面咋没东西啊"))?
             .as_str()
             .ok_or_else(|| other_without_source("static_servers里面咋没东西啊"))?;
@@ -251,9 +251,9 @@ impl GenerateW for Slide {
             4, 5, 19, 18, 16, 17,
         ];
         let (w_sep, h_sep) = (10u32, 80u32);
-        for idx in 0..52 {
-            let x = (offset[idx] % 26 * 12) as u32;
-            let y = if offset[idx] > 25 { h_sep } else { 0 };
+        for (idx, &off) in offset.iter().enumerate() {
+            let x = (off % 26 * 12) as u32;
+            let y = if off > 25 { h_sep } else { 0 };
             let new_x = (idx % 26 * 10) as u32;
             let new_y = if idx > 25 { h_sep } else { 0 };
 
