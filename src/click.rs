@@ -66,18 +66,24 @@ impl Click {
     pub fn simple_match_retry(&mut self, gt: &str, challenge: &str) -> Result<String> {
         self.get_c_s(gt, challenge, None)?;
         self.get_type(gt, challenge, None)?;
-        let (c, s, args) = self.get_new_c_s_args(gt, challenge)?;
+        let (c, s, mut args) = self.get_new_c_s_args(gt, challenge)?;
+        let mut last_error = None;
 
-        if let Ok(result) = self.vvv(gt, challenge, &c, s.as_str(), args) {
-            return Ok(result);
-        }
-
-        loop {
-            let args = self.refresh(gt, challenge)?;
-            if let Ok(result) = self.vvv(gt, challenge, &c, s.as_str(), args) {
-                return Ok(result);
+        for attempt in 0..5 {
+            match self.vvv(gt, challenge, &c, s.as_str(), args) {
+                Ok(result) => return Ok(result),
+                Err(err) => last_error = Some(err),
             }
+
+            if attempt == 4 {
+                break;
+            }
+
+            sleep(Duration::from_millis(250));
+            args = self.refresh(gt, challenge)?;
         }
+
+        Err(last_error.unwrap_or_else(|| other_without_source("多次重试后仍未通过验证")))
     }
 
     fn vvv(
@@ -115,7 +121,7 @@ impl Api for Click {
 
     fn register_test(&self, url: &str) -> crate::error::Result<(String, String)> {
         let res = self.client().get(url).send().map_err(net_work_error)?;
-        let res = res.json::<Value>().expect("解析失败");
+        let res = res.json::<Value>().map_err(parse_error)?;
         let res_data = res
             .get("data")
             .ok_or_else(|| missing_param("data"))?
@@ -161,11 +167,11 @@ impl Api for Click {
             ("type", "click"),
             ("lang", "zh-cn"),
             ("https", "false"),
-            ("protocol", "https://"), 
+            ("protocol", "https://"),
             ("product", "embed"),
             ("api_server", "api.geetest.com"),
             ("autoReset", "true"),
-            ("width", "100%"), 
+            ("width", "100%"),
         ]);
 
         params.insert(
@@ -193,13 +199,9 @@ impl Api for Click {
 
         let res: Value = serde_json::from_str(res).map_err(parse_error)?;
         let res_data = res.get("data").ok_or_else(|| missing_param("data"))?;
-        let c: Vec<u8> = serde_json::from_value(
-            res_data
-                .get("c")
-                .ok_or_else(|| missing_param("c"))?
-                .clone(),
-        )
-        .map_err(parse_error)?;
+        let c: Vec<u8> =
+            serde_json::from_value(res_data.get("c").ok_or_else(|| missing_param("c"))?.clone())
+                .map_err(parse_error)?;
         let static_server = res_data
             .get("static_servers")
             .ok_or_else(|| missing_param("static_servers"))?

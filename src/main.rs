@@ -10,18 +10,17 @@ use axum::{
     Router,
 };
 
-use tokio::net::TcpListener;
-use tower_http::trace::TraceLayer;
-use reqwest::blocking::Client;
-use std::time::Duration;
 use lru::LruCache;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::task;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod abstraction;
@@ -36,25 +35,36 @@ use crate::slide::Slide;
 
 #[derive(Clone)]
 struct ClientManager {
-    clients: Arc<Mutex<HashMap<String, Arc<Client>>>>,
+    clients: Arc<Mutex<LruCache<String, Arc<Client>>>>,
 }
 
 const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
+const CLIENT_CACHE_SIZE: usize = 256;
+const INSTANCE_CACHE_SIZE: usize = 127;
 
 impl ClientManager {
     fn new() -> Self {
         Self {
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(CLIENT_CACHE_SIZE).unwrap(),
+            ))),
         }
     }
 
-    fn get(&self, proxy: Option<&str>, user_agent: Option<&str>) -> Result<Arc<Client>, crate::error::Error> {
+    fn get(
+        &self,
+        proxy: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<Arc<Client>, crate::error::Error> {
         let proxy_key = proxy.unwrap_or("no_proxy");
         // 使用传入的 user_agent 或默认值来生成缓存键
         let ua_key = user_agent.unwrap_or(DEFAULT_USER_AGENT);
         let key = format!("{}|{}", proxy_key, ua_key);
 
-        let mut clients = self.clients.lock().expect("ClientManager mutex poisoned");
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| error::other_without_source("client cache mutex poisoned"))?;
         if let Some(client) = clients.get(&key) {
             return Ok(Arc::clone(client));
         }
@@ -72,8 +82,8 @@ impl ClientManager {
             .pool_idle_timeout(Duration::from_secs(10));
 
         if let Some(proxy_url) = proxy {
-            let proxy = reqwest::Proxy::all(proxy_url)
-                .map_err(|e| error::other("无效的代理 URL", e))?;
+            let proxy =
+                reqwest::Proxy::all(proxy_url).map_err(|e| error::other("无效的代理 URL", e))?;
             client_builder = client_builder.proxy(proxy);
         }
 
@@ -82,7 +92,7 @@ impl ClientManager {
             .map_err(|e| error::other("构建客户端失败", e))?;
 
         let client_arc = Arc::new(new_client);
-        clients.insert(key, Arc::clone(&client_arc));
+        clients.put(key, Arc::clone(&client_arc));
         Ok(client_arc)
     }
 }
@@ -96,7 +106,7 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
-        let cache_size = NonZeroUsize::new(127).unwrap();
+        let cache_size = NonZeroUsize::new(INSTANCE_CACHE_SIZE).unwrap();
         Self {
             client_manager: ClientManager::new(),
             click_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
@@ -157,10 +167,18 @@ struct CSResponse {
 
 impl<T> ApiResponse<T> {
     fn success(data: T) -> Self {
-        Self { success: true, data: Some(data), error: None }
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
     }
     fn error(message: String) -> Self {
-        Self { success: false, data: None, error: Some(message) }
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+        }
     }
 }
 
@@ -171,15 +189,34 @@ fn get_click_instance(
     user_agent: Option<String>,
 ) -> Result<Click, Response> {
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
-    let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
-    })?;
+    let configured_client = state
+        .client_manager
+        .get(proxy.as_deref(), user_agent.as_deref())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(e.to_string())),
+            )
+                .into_response()
+        })?;
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
-         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(e.to_string())),
+        )
+            .into_response()
     })?;
     let mut instances = match state.click_instances.lock() {
         Ok(guard) => guard,
-        Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error("内部服务错误: Mutex poisoned".to_string()))).into_response()),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "内部服务错误: Mutex poisoned".to_string(),
+                )),
+            )
+                .into_response())
+        }
     };
     if let Some(instance) = instances.get_mut(&session_id) {
         instance.update_client(Arc::clone(&configured_client));
@@ -197,15 +234,34 @@ fn get_slide_instance(
     user_agent: Option<String>,
 ) -> Result<Slide, Response> {
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
-    let configured_client = state.client_manager.get(proxy.as_deref(), user_agent.as_deref()).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
-    })?;
+    let configured_client = state
+        .client_manager
+        .get(proxy.as_deref(), user_agent.as_deref())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(e.to_string())),
+            )
+                .into_response()
+        })?;
     let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
-         (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::error(e.to_string())),
+        )
+            .into_response()
     })?;
     let mut instances = match state.slide_instances.lock() {
         Ok(guard) => guard,
-        Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error("内部服务错误: Mutex poisoned".to_string()))).into_response()),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()>::error(
+                    "内部服务错误: Mutex poisoned".to_string(),
+                )),
+            )
+                .into_response())
+        }
     };
     if let Some(instance) = instances.get_mut(&session_id) {
         instance.update_client(Arc::clone(&configured_client));
@@ -218,72 +274,85 @@ fn get_slide_instance(
 
 // 新增：一个记录请求体的中间件
 async fn log_request_body(req: Request<Body>, next: Next) -> Result<Response, StatusCode> {
-    let (parts, body) = req.into_parts();
-
-    if parts.method == "POST" {
-        let bytes = match axum::body::to_bytes(body, usize::MAX).await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::error!("无法读取请求 body: {}", err);
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        };
-        if let Ok(body_str) = std::str::from_utf8(&bytes) {
-            tracing::info!(method = %parts.method, uri = %parts.uri, body = %body_str, "收到请求");
-        } else {
-            tracing::info!(method = %parts.method, uri = %parts.uri, body = "[非 UTF-8 数据]", "收到请求");
-        }
-        let req = Request::from_parts(parts, Body::from(bytes));
-        Ok(next.run(req).await)
-    } else {
-        let req = Request::from_parts(parts, body);
-        Ok(next.run(req).await)
+    if req.method() == axum::http::Method::POST {
+        let content_length = req
+            .headers()
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown");
+        tracing::info!(
+            method = %req.method(),
+            uri = %req.uri(),
+            content_length = %content_length,
+            "收到请求"
+        );
     }
+
+    Ok(next.run(req).await)
 }
 
 macro_rules! handle_blocking_call {
-    ($instance_result:expr, $block:expr) => {
-        {
-            let mut instance = match $instance_result {
-                Ok(inst) => inst,
-                Err(resp) => return resp,
-            };
-            match task::spawn_blocking(move || $block(&mut instance)).await {
-                Ok(Ok(data)) => Json(ApiResponse::success(data)).into_response(),
-                Ok(Err(e)) => {
-                    tracing::error!("业务逻辑错误: {}", e);
-                    (StatusCode::BAD_REQUEST, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
-                },
-                Err(e) => {
-                    tracing::error!("Tokio 任务执行错误: {}", e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()>::error(e.to_string()))).into_response()
-                },
+    ($instance_result:expr, $block:expr) => {{
+        let mut instance = match $instance_result {
+            Ok(inst) => inst,
+            Err(resp) => return resp,
+        };
+        match task::spawn_blocking(move || $block(&mut instance)).await {
+            Ok(Ok(data)) => Json(ApiResponse::success(data)).into_response(),
+            Ok(Err(e)) => {
+                tracing::error!("业务逻辑错误: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<()>::error(e.to_string())),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!("Tokio 任务执行错误: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()>::error(e.to_string())),
+                )
+                    .into_response()
             }
         }
-    };
+    }};
 }
-
 
 // --- API 处理函数 ---
 
-async fn click_simple_match(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
+async fn click_simple_match(
+    State(state): State<AppState>,
+    Json(req): Json<CommonRequest>,
+) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match(&req.gt, &req.challenge)
     )
 }
 
-async fn click_simple_match_retry(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
+async fn click_simple_match_retry(
+    State(state): State<AppState>,
+    Json(req): Json<CommonRequest>,
+) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
         move |instance: &mut Click| instance.simple_match_retry(&req.gt, &req.challenge)
     )
 }
 
-async fn click_register_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
+async fn click_register_test(
+    State(state): State<AppState>,
+    Json(req): Json<UrlRequest>,
+) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Click| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
+        move |instance: &mut Click| instance
+            .register_test(&req.url)
+            .map(|(f, s)| TupleResponse2 {
+                first: f,
+                second: s
+            })
     )
 }
 
@@ -291,7 +360,9 @@ async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequ
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Click| instance.get_c_s(&req.gt, &req.challenge, w_owned.as_deref()).map(|(c, s)| CSResponse { c, s })
+        move |instance: &mut Click| instance
+            .get_c_s(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|(c, s)| CSResponse { c, s })
     )
 }
 
@@ -299,10 +370,12 @@ async fn click_get_type(State(state): State<AppState>, Json(req): Json<CommonReq
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Click| instance.get_type(&req.gt, &req.challenge, w_owned.as_deref()).map(|t| match t {
-            VerifyType::Click => "click".to_string(),
-            VerifyType::Slide => "slide".to_string(),
-        })
+        move |instance: &mut Click| instance
+            .get_type(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|t| match t {
+                VerifyType::Click => "click".to_string(),
+                VerifyType::Slide => "slide".to_string(),
+            })
     )
 }
 
@@ -310,14 +383,28 @@ async fn click_verify(State(state): State<AppState>, Json(req): Json<CommonReque
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Click| instance.verify(&req.gt, &req.challenge, w_owned.as_deref()).map(|(f, s)| TupleResponse2 { first: f, second: s })
+        move |instance: &mut Click| instance
+            .verify(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|(f, s)| TupleResponse2 {
+                first: f,
+                second: s
+            })
     )
 }
 
-async fn click_generate_w(State(state): State<AppState>, Json(req): Json<GenerateWRequest>) -> Response {
+async fn click_generate_w(
+    State(state): State<AppState>,
+    Json(req): Json<GenerateWRequest>,
+) -> Response {
     handle_blocking_call!(
         get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Click| instance.generate_w(&req.key, &req.gt, &req.challenge, &req.c, &req.s)
+        move |instance: &mut Click| instance.generate_w(
+            &req.key,
+            &req.gt,
+            &req.challenge,
+            &req.c,
+            &req.s
+        )
     )
 }
 
@@ -328,10 +415,18 @@ async fn click_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) 
     )
 }
 
-async fn slide_register_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
+async fn slide_register_test(
+    State(state): State<AppState>,
+    Json(req): Json<UrlRequest>,
+) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.register_test(&req.url).map(|(f, s)| TupleResponse2 { first: f, second: s })
+        move |instance: &mut Slide| instance
+            .register_test(&req.url)
+            .map(|(f, s)| TupleResponse2 {
+                first: f,
+                second: s
+            })
     )
 }
 
@@ -339,7 +434,9 @@ async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequ
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.get_c_s(&req.gt, &req.challenge, w_owned.as_deref()).map(|(c, s)| CSResponse { c, s })
+        move |instance: &mut Slide| instance
+            .get_c_s(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|(c, s)| CSResponse { c, s })
     )
 }
 
@@ -347,10 +444,12 @@ async fn slide_get_type(State(state): State<AppState>, Json(req): Json<CommonReq
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.get_type(&req.gt, &req.challenge, w_owned.as_deref()).map(|t| match t {
-            VerifyType::Click => "click".to_string(),
-            VerifyType::Slide => "slide".to_string(),
-        })
+        move |instance: &mut Slide| instance
+            .get_type(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|t| match t {
+                VerifyType::Click => "click".to_string(),
+                VerifyType::Slide => "slide".to_string(),
+            })
     )
 }
 
@@ -358,14 +457,28 @@ async fn slide_verify(State(state): State<AppState>, Json(req): Json<CommonReque
     let w_owned = req.w.clone();
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.verify(&req.gt, &req.challenge, w_owned.as_deref()).map(|(f, s)| TupleResponse2 { first: f, second: s })
+        move |instance: &mut Slide| instance
+            .verify(&req.gt, &req.challenge, w_owned.as_deref())
+            .map(|(f, s)| TupleResponse2 {
+                first: f,
+                second: s
+            })
     )
 }
 
-async fn slide_generate_w(State(state): State<AppState>, Json(req): Json<GenerateWRequest>) -> Response {
+async fn slide_generate_w(
+    State(state): State<AppState>,
+    Json(req): Json<GenerateWRequest>,
+) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.generate_w(&req.key, &req.gt, &req.challenge, &req.c, &req.s)
+        move |instance: &mut Slide| instance.generate_w(
+            &req.key,
+            &req.gt,
+            &req.challenge,
+            &req.c,
+            &req.s
+        )
     )
 }
 
@@ -376,10 +489,18 @@ async fn slide_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) 
     )
 }
 
-async fn slide_simple_match(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
+async fn slide_simple_match(
+    State(state): State<AppState>,
+    Json(req): Json<CommonRequest>,
+) -> Response {
     handle_blocking_call!(
         get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
-        move |instance: &mut Slide| instance.simple_match(&req.gt, &req.challenge).map(|(f, s)| TupleResponse2 { first: f, second: s })
+        move |instance: &mut Slide| instance
+            .simple_match(&req.gt, &req.challenge)
+            .map(|(f, s)| TupleResponse2 {
+                first: f,
+                second: s
+            })
     )
 }
 
@@ -398,7 +519,7 @@ async fn main() {
         .init();
 
     let state = AppState::new();
-    
+
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/click/simple_match", post(click_simple_match))
@@ -416,7 +537,6 @@ async fn main() {
         .route("/slide/generate_w", post(slide_generate_w))
         .route("/slide/test", post(slide_test))
         .route("/slide/simple_match", post(slide_simple_match))
-
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -458,7 +578,9 @@ async fn main() {
             // 如果是因为端口被占用，且我们已经绑定了 IPv6，这可能意味着 IPv6 绑定已经覆盖了 IPv4（双栈模式）
             // 在这种情况下，我们可以认为服务已经成功启动
             if e.kind() == std::io::ErrorKind::AddrInUse && !tasks.is_empty() {
-                tracing::info!("IPv4 端口绑定失败 (AddressInUse)，假设 IPv6 监听器已处理 IPv4 流量。");
+                tracing::info!(
+                    "IPv4 端口绑定失败 (AddressInUse)，假设 IPv6 监听器已处理 IPv4 流量。"
+                );
             } else {
                 tracing::error!("无法绑定 IPv4 端口: {}", e);
             }

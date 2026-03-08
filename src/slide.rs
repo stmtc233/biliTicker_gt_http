@@ -65,7 +65,7 @@ impl Slide {
             sleep(sleep_duration);
         }
         let (_, validate) = self.verify(gt, &challenge, Some(w.as_str()))?;
-        Ok((challenge,validate))
+        Ok((challenge, validate))
     }
     // --- 新增函数结束 ---
 }
@@ -258,7 +258,9 @@ impl GenerateW for Slide {
             let new_y = if idx > 25 { h_sep } else { 0 };
 
             let pi = bg_img.crop_imm(x, y, w_sep, h_sep);
-            new_bg_img.copy_from(&pi, new_x, new_y).unwrap();
+            new_bg_img
+                .copy_from(&pi, new_x, new_y)
+                .map_err(|e| other("重组滑块背景图失败", e))?;
         }
         let new_bg_img = DynamicImage::ImageRgba8(new_bg_img);
         let res_x = Slide0::run(&slice_img, &new_bg_img)
@@ -267,10 +269,16 @@ impl GenerateW for Slide {
         Ok(res_x.to_string())
     }
 
-    fn generate_w(&self, key: &str, gt: &str, challenge: &str, c: &[u8], s: &str) -> Result<String> {
+    fn generate_w(
+        &self,
+        key: &str,
+        gt: &str,
+        challenge: &str,
+        c: &[u8],
+        s: &str,
+    ) -> Result<String> {
         Ok(slide_calculate(
-            key.parse()
-                .map_err(|e| other("滑动距离不是整数类型", e))?,
+            key.parse().map_err(|e| other("滑动距离不是整数类型", e))?,
             gt,
             challenge,
             c,
