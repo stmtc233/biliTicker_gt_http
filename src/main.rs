@@ -14,6 +14,7 @@ use lru::LruCache;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -297,13 +298,30 @@ macro_rules! handle_blocking_call {
             Ok(inst) => inst,
             Err(resp) => return resp,
         };
-        match task::spawn_blocking(move || $block(&mut instance)).await {
-            Ok(Ok(data)) => Json(ApiResponse::success(data)).into_response(),
-            Ok(Err(e)) => {
+        match task::spawn_blocking(move || {
+            panic::catch_unwind(AssertUnwindSafe(|| $block(&mut instance)))
+        })
+        .await
+        {
+            Ok(Ok(Ok(data))) => Json(ApiResponse::success(data)).into_response(),
+            Ok(Ok(Err(e))) => {
                 tracing::error!("业务逻辑错误: {}", e);
                 (
                     StatusCode::BAD_REQUEST,
                     Json(ApiResponse::<()>::error(e.to_string())),
+                )
+                    .into_response()
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    panic_payload = ?e,
+                    "阻塞业务任务发生 panic"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()>::error(
+                        "内部服务错误: 阻塞任务 panic".to_string(),
+                    )),
                 )
                     .into_response()
             }
@@ -508,8 +526,18 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
+fn install_panic_hook() {
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(panic_info = %panic_info, "检测到未捕获 panic");
+        default_hook(panic_info);
+    }));
+}
+
 #[tokio::main]
 async fn main() {
+    install_panic_hook();
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -545,55 +573,19 @@ async fn main() {
         )
         .with_state(state);
 
-    // 尝试安全地绑定 IPv6 和 IPv4
-    let mut tasks = Vec::new();
-
-    // 尝试绑定 IPv6 (可能是双栈)
-    match TcpListener::bind("[::]:3000").await {
-        Ok(listener_v6) => {
-            tracing::info!("服务已启动于 http://[::]:3000");
-            let app_v6 = app.clone();
-            tasks.push(tokio::spawn(async move {
-                if let Err(e) = axum::serve(listener_v6, app_v6).await {
-                    tracing::error!("IPv6 服务错误: {}", e);
-                }
-            }));
-        }
+    let bind_addr = "0.0.0.0:3000";
+    let listener = match TcpListener::bind(bind_addr).await {
+        Ok(listener) => listener,
         Err(e) => {
-            tracing::warn!("无法绑定 IPv6 端口: {}", e);
+            tracing::error!(address = bind_addr, error = %e, "端口绑定失败，服务启动终止");
+            std::process::exit(1);
         }
-    }
+    };
 
-    // 尝试绑定 IPv4
-    match TcpListener::bind("0.0.0.0:3000").await {
-        Ok(listener_v4) => {
-            tracing::info!("服务已启动于 http://0.0.0.0:3000");
-            tasks.push(tokio::spawn(async move {
-                if let Err(e) = axum::serve(listener_v4, app).await {
-                    tracing::error!("IPv4 服务错误: {}", e);
-                }
-            }));
-        }
-        Err(e) => {
-            // 如果是因为端口被占用，且我们已经绑定了 IPv6，这可能意味着 IPv6 绑定已经覆盖了 IPv4（双栈模式）
-            // 在这种情况下，我们可以认为服务已经成功启动
-            if e.kind() == std::io::ErrorKind::AddrInUse && !tasks.is_empty() {
-                tracing::info!(
-                    "IPv4 端口绑定失败 (AddressInUse)，假设 IPv6 监听器已处理 IPv4 流量。"
-                );
-            } else {
-                tracing::error!("无法绑定 IPv4 端口: {}", e);
-            }
-        }
-    }
+    tracing::info!(address = bind_addr, "HTTP 服务已启动");
 
-    if tasks.is_empty() {
-        tracing::error!("无法绑定任何端口，服务启动失败！");
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::error!(error = %e, "HTTP 监听任务退出，进程即将终止");
         std::process::exit(1);
-    }
-
-    // 等待所有任务完成
-    for task in tasks {
-        let _ = task.await;
     }
 }
