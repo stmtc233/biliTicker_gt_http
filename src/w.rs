@@ -111,10 +111,45 @@ fn encrypt(json_str: &str) -> String{
     format!("{}{}", p, u)
 }
 
+fn get_random_webgl() -> (&'static str, &'static str) {
+    static WEBGL_DATA: &str = include_str!("../data.txt");
+    
+    let lines = WEBGL_DATA.lines().filter(|l| !l.is_empty()).collect::<Vec<_>>();
+    if lines.is_empty() {
+        return ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) HD Graphics 520 Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    }
+
+    let mut rng = thread_rng();
+    let idx = rng.gen_range(0..lines.len());
+    let selected_line = lines[idx];
+
+    // Data format is typically "0.1327... Apple Inc.,Apple GPU"
+    // Split by space to ignore the probability part
+    let rest = if let Some((_, rest)) = selected_line.split_once(' ') {
+        rest
+    } else {
+        selected_line
+    };
+
+    if let Some((ven, ren)) = rest.split_once(',') {
+        (ven.trim(), ren.trim())
+    } else {
+        ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) HD Graphics 520 Direct3D11 vs_5_0 ps_5_0, D3D11)")
+    }
+}
+
 pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> String {
     let pass_time = (random::<f32>() * 700f32 + 1300f32) as usize;
     let m5 = md5::compute(format!("{}{}{}", gt, &challenge[..challenge.len()-2].to_string(), pass_time));
     let rp = hex::encode(m5.to_vec());
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let (ven, ren) = get_random_webgl();
+    let mut rng = thread_rng();
 
     let dic = json!({
         "lang": "zh-cn",
@@ -125,10 +160,10 @@ pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> String {
             "v": "9.1.8-bfget5",
             "$_E_": false,
             "me": true,
-            "ven": "Google Inc. (Intel)",
-            "ren": "ANGLE (Intel, Intel(R) HD Graphics 520 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-            "fp": ["move", 483, 149, 1702019849214u64, "pointermove"],
-            "lp": ["up", 657, 100, 1702019852230u64, "pointerup"],
+            "ven": ven,
+            "ren": ren,
+            "fp": ["move", rng.gen_range(200..800), rng.gen_range(100..500), now_ms - 2000, "pointermove"],
+            "lp": ["up", rng.gen_range(200..800), rng.gen_range(100..500), now_ms - 50, "pointerup"],
             "em": {
                 "ph": 0,
                 "cp": 0,
@@ -139,27 +174,27 @@ pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> String {
                 "sc": 0,
             },
             "tm": {
-                "a": 1702019845759u64,
-                "b": 1702019845951u64,
-                "c": 1702019845951u64,
+                "a": now_ms - 3000,
+                "b": now_ms - 2800,
+                "c": now_ms - 2800,
                 "d": 0,
                 "e": 0,
-                "f": 1702019845763u64,
-                "g": 1702019845785u64,
-                "h": 1702019845785u64,
-                "i": 1702019845785u64,
-                "j": 1702019845845u64,
-                "k": 1702019845812u64,
-                "l": 1702019845845u64,
-                "m": 1702019845942u64,
-                "n": 1702019845946u64,
-                "o": 1702019845954u64,
-                "p": 1702019846282u64,
-                "q": 1702019846282u64,
-                "r": 1702019846287u64,
-                "s": 1702019846288u64,
-                "t": 1702019846288u64,
-                "u": 1702019846288u64,
+                "f": now_ms - 2990,
+                "g": now_ms - 2950,
+                "h": now_ms - 2950,
+                "i": now_ms - 2950,
+                "j": now_ms - 2900,
+                "k": now_ms - 2920,
+                "l": now_ms - 2900,
+                "m": now_ms - 2850,
+                "n": now_ms - 2840,
+                "o": now_ms - 2830,
+                "p": now_ms - 2500,
+                "q": now_ms - 2500,
+                "r": now_ms - 2490,
+                "s": now_ms - 2480,
+                "t": now_ms - 2480,
+                "u": now_ms - 2480,
             },
             "dnf": "dnf",
             "by": 0,
@@ -441,20 +476,28 @@ pub fn slide_calculate(key: i32, gt: &str, challenge: &str, c: &[u8], s: &str) -
     let m5 = md5::compute(format!("{}{}{}", gt, &challenge[..challenge.len() - 2], pass_time));
     let rp = hex::encode(m5.to_vec());
 
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let (ven, ren) = get_random_webgl();
+    let mut rng = thread_rng();
+
     let dic = json!({
         "lang": "zh-cn",
         "userresponse": user_response,
         "passtime": pass_time,
-        "imgload": thread_rng().gen_range(100..=200),
+        "imgload": rng.gen_range(100..=200),
         "aa": aa,
         "ep": {
             "v": "9.1.8-bfget5",
             "$_E_": false,
             "me": true,
-            "ven": "Google Inc. (Intel)",
-            "ren": "ANGLE (Intel, Intel(R) HD Graphics 520 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-            "fp": ["move", 483, 149, 1702019849214u64, "pointermove"],
-            "lp": ["up", 657, 100, 1702019852230u64, "pointerup"],
+            "ven": ven,
+            "ren": ren,
+            "fp": ["move", rng.gen_range(200..800), rng.gen_range(100..500), now_ms - 2000, "pointermove"],
+            "lp": ["up", rng.gen_range(200..800), rng.gen_range(100..500), now_ms - 50, "pointerup"],
             "em": {
                 "ph": 0,
                 "cp": 0,
@@ -465,27 +508,27 @@ pub fn slide_calculate(key: i32, gt: &str, challenge: &str, c: &[u8], s: &str) -
                 "sc": 0,
             },
             "tm": {
-                "a": 1702019845759u64,
-                "b": 1702019845951u64,
-                "c": 1702019845951u64,
+                "a": now_ms - 3000,
+                "b": now_ms - 2800,
+                "c": now_ms - 2800,
                 "d": 0,
                 "e": 0,
-                "f": 1702019845763u64,
-                "g": 1702019845785u64,
-                "h": 1702019845785u64,
-                "i": 1702019845785u64,
-                "j": 1702019845845u64,
-                "k": 1702019845812u64,
-                "l": 1702019845845u64,
-                "m": 1702019845942u64,
-                "n": 1702019845946u64,
-                "o": 1702019845954u64,
-                "p": 1702019846282u64,
-                "q": 1702019846282u64,
-                "r": 1702019846287u64,
-                "s": 1702019846288u64,
-                "t": 1702019846288u64,
-                "u": 1702019846288u64,
+                "f": now_ms - 2990,
+                "g": now_ms - 2950,
+                "h": now_ms - 2950,
+                "i": now_ms - 2950,
+                "j": now_ms - 2900,
+                "k": now_ms - 2920,
+                "l": now_ms - 2900,
+                "m": now_ms - 2850,
+                "n": now_ms - 2840,
+                "o": now_ms - 2830,
+                "p": now_ms - 2500,
+                "q": now_ms - 2500,
+                "r": now_ms - 2490,
+                "s": now_ms - 2480,
+                "t": now_ms - 2480,
+                "u": now_ms - 2480,
             },
             "dnf": "dnf",
             "by": 0,
