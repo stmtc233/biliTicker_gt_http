@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -56,11 +56,13 @@ impl ClientManager {
         &self,
         proxy: Option<&str>,
         user_agent: Option<&str>,
+        referer: Option<&str>,
     ) -> Result<Arc<Client>, crate::error::Error> {
         let proxy_key = proxy.unwrap_or("no_proxy");
         // 使用传入的 user_agent 或默认值来生成缓存键
         let ua_key = user_agent.unwrap_or(DEFAULT_USER_AGENT);
-        let key = format!("{}|{}", proxy_key, ua_key);
+        let referer_key = referer.unwrap_or("no_referer");
+        let key = format!("{}|{}|{}", proxy_key, ua_key, referer_key);
 
         let mut clients = self
             .clients
@@ -81,6 +83,14 @@ impl ClientManager {
             .timeout(Duration::from_secs(10))
             // 设置连接池空闲超时
             .pool_idle_timeout(Duration::from_secs(10));
+
+        if let Some(referer_to_set) = referer {
+            let mut headers = HeaderMap::new();
+            let referer_value = HeaderValue::from_str(referer_to_set)
+                .map_err(|e| error::other("无效的 Referer", e))?;
+            headers.insert(header::REFERER, referer_value);
+            client_builder = client_builder.default_headers(headers);
+        }
 
         if let Some(proxy_url) = proxy {
             let proxy =
@@ -125,6 +135,7 @@ struct CommonRequest {
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
+    referer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +144,7 @@ struct UrlRequest {
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
+    referer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +157,7 @@ struct GenerateWRequest {
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
+    referer: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -188,11 +201,12 @@ fn get_click_instance(
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
+    referer: Option<String>,
 ) -> Result<Click, Response> {
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
     let configured_client = state
         .client_manager
-        .get(proxy.as_deref(), user_agent.as_deref())
+        .get(proxy.as_deref(), user_agent.as_deref(), referer.as_deref())
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -200,7 +214,7 @@ fn get_click_instance(
             )
                 .into_response()
         })?;
-    let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
+    let noproxy_client = state.client_manager.get(None, None, None).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<()>::error(e.to_string())),
@@ -233,11 +247,12 @@ fn get_slide_instance(
     session_id: Option<String>,
     proxy: Option<String>,
     user_agent: Option<String>,
+    referer: Option<String>,
 ) -> Result<Slide, Response> {
     let session_id = session_id.unwrap_or_else(|| "default".to_string());
     let configured_client = state
         .client_manager
-        .get(proxy.as_deref(), user_agent.as_deref())
+        .get(proxy.as_deref(), user_agent.as_deref(), referer.as_deref())
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -245,7 +260,7 @@ fn get_slide_instance(
             )
                 .into_response()
         })?;
-    let noproxy_client = state.client_manager.get(None, None).map_err(|e| {
+    let noproxy_client = state.client_manager.get(None, None, None).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<()>::error(e.to_string())),
@@ -344,7 +359,7 @@ async fn click_simple_match(
     Json(req): Json<CommonRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance.simple_match(&req.gt, &req.challenge)
     )
 }
@@ -354,7 +369,7 @@ async fn click_simple_match_retry(
     Json(req): Json<CommonRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance.simple_match_retry(&req.gt, &req.challenge)
     )
 }
@@ -364,7 +379,7 @@ async fn click_register_test(
     Json(req): Json<UrlRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance
             .register_test(&req.url)
             .map(|(f, s)| TupleResponse2 {
@@ -377,7 +392,7 @@ async fn click_register_test(
 async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance
             .get_c_s(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|(c, s)| CSResponse { c, s })
@@ -387,7 +402,7 @@ async fn click_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequ
 async fn click_get_type(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance
             .get_type(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|t| match t {
@@ -400,7 +415,7 @@ async fn click_get_type(State(state): State<AppState>, Json(req): Json<CommonReq
 async fn click_verify(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance
             .verify(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|(f, s)| TupleResponse2 {
@@ -415,7 +430,7 @@ async fn click_generate_w(
     Json(req): Json<GenerateWRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance.generate_w(
             &req.key,
             &req.gt,
@@ -428,7 +443,7 @@ async fn click_generate_w(
 
 async fn click_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
-        get_click_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_click_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Click| instance.test(&req.url)
     )
 }
@@ -438,7 +453,7 @@ async fn slide_register_test(
     Json(req): Json<UrlRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance
             .register_test(&req.url)
             .map(|(f, s)| TupleResponse2 {
@@ -451,7 +466,7 @@ async fn slide_register_test(
 async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance
             .get_c_s(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|(c, s)| CSResponse { c, s })
@@ -461,7 +476,7 @@ async fn slide_get_c_s(State(state): State<AppState>, Json(req): Json<CommonRequ
 async fn slide_get_type(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance
             .get_type(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|t| match t {
@@ -474,7 +489,7 @@ async fn slide_get_type(State(state): State<AppState>, Json(req): Json<CommonReq
 async fn slide_verify(State(state): State<AppState>, Json(req): Json<CommonRequest>) -> Response {
     let w_owned = req.w.clone();
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance
             .verify(&req.gt, &req.challenge, w_owned.as_deref())
             .map(|(f, s)| TupleResponse2 {
@@ -489,7 +504,7 @@ async fn slide_generate_w(
     Json(req): Json<GenerateWRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance.generate_w(
             &req.key,
             &req.gt,
@@ -502,7 +517,7 @@ async fn slide_generate_w(
 
 async fn slide_test(State(state): State<AppState>, Json(req): Json<UrlRequest>) -> Response {
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance.test(&req.url)
     )
 }
@@ -512,7 +527,7 @@ async fn slide_simple_match(
     Json(req): Json<CommonRequest>,
 ) -> Response {
     handle_blocking_call!(
-        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent),
+        get_slide_instance(&state, req.session_id, req.proxy, req.user_agent, req.referer),
         move |instance: &mut Slide| instance
             .simple_match(&req.gt, &req.challenge)
             .map(|(f, s)| TupleResponse2 {
