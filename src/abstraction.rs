@@ -168,9 +168,9 @@ pub(crate) trait Api {
     /// #### 返回值
     /// - img
     fn download_img(&self, img_url: &str) -> Result<Vec<u8>> {
-        // 使用不带代理的客户端
+        // 使用当前配置的图片下载客户端
         let res = self
-            .noproxy_client()
+            .download_client()
             .get(img_url)
             .send()
             .map_err(net_work_error)?;
@@ -182,8 +182,8 @@ pub(crate) trait Api {
     /// 返回可能带代理的客户端
     fn client(&self) -> &Client;
 
-    /// 返回一个永不带代理的客户端，用于下载图片
-    fn noproxy_client(&self) -> &Client;
+    /// 返回当前用于下载图片的客户端，默认不带代理
+    fn download_client(&self) -> &Client;
 }
 
 pub(crate) trait GenerateW: Api {

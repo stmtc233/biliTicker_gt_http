@@ -18,21 +18,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[derive(Clone)]
 pub struct Slide {
     client: Arc<Client>,
-    noproxy_client: Arc<Client>,
+    download_client: Arc<Client>,
     verify_type: VerifyType,
 }
 
 impl Slide {
-    pub fn new(client: Arc<Client>, noproxy_client: Arc<Client>) -> Self {
+    pub fn new(client: Arc<Client>, download_client: Arc<Client>) -> Self {
         Slide {
             client,
-            noproxy_client,
+            download_client,
             verify_type: VerifyType::Slide,
         }
     }
 
-    pub fn update_client(&mut self, new_client: Arc<Client>) {
+    pub fn update_clients(&mut self, new_client: Arc<Client>, new_download_client: Arc<Client>) {
         self.client = new_client;
+        self.download_client = new_download_client;
     }
 
     // --- 新增函数 ---
@@ -76,8 +77,8 @@ impl Api for Slide {
     fn client(&self) -> &Client {
         &self.client
     }
-    fn noproxy_client(&self) -> &Client {
-        &self.noproxy_client
+    fn download_client(&self) -> &Client {
+        &self.download_client
     }
 
     fn get_new_c_s_args(

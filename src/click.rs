@@ -27,23 +27,24 @@ static GLOBAL_CLICK_BREAKER: Lazy<Arc<ChineseClick0>> = Lazy::new(|| {
 #[derive(Clone)]
 pub struct Click {
     client: Arc<Client>,
-    noproxy_client: Arc<Client>,
+    download_client: Arc<Client>,
     verify_type: VerifyType,
     cb: Arc<ChineseClick0>,
 }
 
 impl Click {
-    pub fn new(client: Arc<Client>, noproxy_client: Arc<Client>) -> Self {
+    pub fn new(client: Arc<Client>, download_client: Arc<Client>) -> Self {
         Click {
             client,
-            noproxy_client,
+            download_client,
             verify_type: VerifyType::Click,
             cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
         }
     }
 
-    pub fn update_client(&mut self, new_client: Arc<Client>) {
+    pub fn update_clients(&mut self, new_client: Arc<Client>, new_download_client: Arc<Client>) {
         self.client = new_client;
+        self.download_client = new_download_client;
     }
 
     pub fn simple_match(&mut self, gt: &str, challenge: &str) -> Result<String> {
@@ -115,8 +116,8 @@ impl Api for Click {
     fn client(&self) -> &Client {
         &self.client
     }
-    fn noproxy_client(&self) -> &Client {
-        &self.noproxy_client
+    fn download_client(&self) -> &Client {
+        &self.download_client
     }
 
     fn register_test(&self, url: &str) -> crate::error::Result<(String, String)> {
