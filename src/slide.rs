@@ -1,6 +1,7 @@
 // slide.rs
 
 use crate::abstraction::{Api, GenerateW, Test, VerifyType};
+use crate::debug;
 use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
@@ -240,11 +241,23 @@ impl Api for Slide {
 
 impl GenerateW for Slide {
     fn calculate_key(&mut self, args: Self::ArgsType) -> Result<String> {
+        let started_at = Instant::now();
         let (_, _, bg, slice) = args;
-        let bg_img = self.download_img(bg.as_str())?;
-        let slice_img = self.download_img(slice.as_str())?;
-        let slice_img = image::load_from_memory(&slice_img).map_err(|e| other("内部错误", e))?;
-        let bg_img = image::load_from_memory(&bg_img).map_err(|e| other("图片解析错误", e))?;
+        let bg_bytes = self.download_img(bg.as_str())?;
+        let slice_bytes = self.download_img(slice.as_str())?;
+        let slice_img = image::load_from_memory(&slice_bytes).map_err(|e| other("内部错误", e))?;
+        let bg_img = image::load_from_memory(&bg_bytes).map_err(|e| other("图片解析错误", e))?;
+        tracing::debug!(
+            background_bytes = bg_bytes.len(),
+            background_width = bg_img.width(),
+            background_height = bg_img.height(),
+            slice_bytes = slice_bytes.len(),
+            slice_width = slice_img.width(),
+            slice_height = slice_img.height(),
+            "滑块验证码图片已加载"
+        );
+        debug::save_image("slide-background-scrambled", &bg_img);
+        debug::save_image("slide-piece", &slice_img);
         let mut new_bg_img = image::ImageBuffer::new(260, 160);
         let offset = [
             39, 38, 48, 49, 41, 40, 46, 47, 35, 34, 50, 51, 33, 32, 28, 29, 27, 26, 36, 37, 31, 30,
@@ -264,9 +277,24 @@ impl GenerateW for Slide {
                 .map_err(|e| other("重组滑块背景图失败", e))?;
         }
         let new_bg_img = DynamicImage::ImageRgba8(new_bg_img);
+        debug::save_image("slide-background-restored", &new_bg_img);
+        let inference_started_at = Instant::now();
         let res_x = Slide0::run(&slice_img, &new_bg_img)
-            .map_err(|_| other_without_source("滑块识别内部错误"))?
+            .map_err(|e| {
+                tracing::debug!(
+                    error = %e,
+                    inference_ms = inference_started_at.elapsed().as_millis(),
+                    "滑块识别执行失败"
+                );
+                other_without_source(&format!("滑块识别内部错误: {}", e))
+            })?
             .x1;
+        tracing::debug!(
+            offset_x = res_x,
+            inference_ms = inference_started_at.elapsed().as_millis(),
+            total_ms = started_at.elapsed().as_millis(),
+            "滑块识别完成"
+        );
         Ok(res_x.to_string())
     }
 

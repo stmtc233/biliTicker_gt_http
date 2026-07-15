@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::task;
 use tower::ServiceBuilder;
@@ -26,6 +26,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod abstraction;
 mod click;
+mod debug;
 mod error;
 mod slide;
 mod w;
@@ -309,6 +310,9 @@ fn get_slide_instance(
 
 // 新增：一个记录请求体的中间件
 async fn log_request_body(req: Request<Body>, next: Next) -> Result<Response, StatusCode> {
+    let started_at = Instant::now();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
     if req.method() == axum::http::Method::POST {
         let content_length = req
             .headers()
@@ -323,7 +327,15 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Result<Response, St
         );
     }
 
-    Ok(next.run(req).await)
+    let response = next.run(req).await;
+    tracing::debug!(
+        method = %method,
+        path = %path,
+        status = %response.status(),
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "请求处理完成"
+    );
+    Ok(response)
 }
 
 macro_rules! handle_blocking_call {
@@ -675,15 +687,35 @@ fn install_panic_hook() {
 
 #[tokio::main]
 async fn main() {
-    install_panic_hook();
+    let debug_mode = debug::init_from_startup_options();
+
+    let filter = if debug_mode {
+        tracing_subscriber::EnvFilter::new("bili_ticket_gt_server=debug,tower_http=debug")
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "bili_ticket_gt_server=info,tower_http=info".into())
+    };
 
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "bili_ticket_gt_server=info,tower_http=info".into()),
+            filter,
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    install_panic_hook();
+
+    if debug_mode {
+        let current_dir = std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("<无法读取: {error}>"));
+        tracing::info!(
+            current_dir = %current_dir,
+            model_dir = %format!("{current_dir}\\models"),
+            artifacts_dir = %format!("{current_dir}\\debug_artifacts"),
+            "调试模式已开启"
+        );
+    }
 
     let state = AppState::new();
 

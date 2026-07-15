@@ -15,6 +15,16 @@
 
 ### 使用方式
 
+### Rust 服务调试模式
+
+启动 Rust 服务时传入 `--debug`（或设置环境变量 `BILI_TICKET_GT_DEBUG=1`），会启用详细日志：请求耗时、验证码图片尺寸、模型推理耗时、识别点数量和底层错误。点选与滑块的输入图片会保存到启动目录下的 `debug_artifacts`。
+
+```powershell
+cargo run -- --debug
+```
+
+调试图片和日志可能包含短时有效的验证码数据，仅用于本地排查；完成后应及时清理 `debug_artifacts`。
+
 1. pip install bili_ticket_gt_python
 2. import bili_ticket_gt_python
 3. slide = bili_ticket_gt_python.SlidePy()

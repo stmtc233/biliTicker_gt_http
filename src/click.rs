@@ -1,6 +1,7 @@
 // click.rs
 
 use crate::abstraction::{Api, GenerateW, Test, VerifyType};
+use crate::debug;
 use crate::error::{
     missing_param, net_work_error, other, other_without_source, parse_error, Result,
 };
@@ -347,14 +348,31 @@ impl Api for Click {
 
 impl GenerateW for Click {
     fn calculate_key(&mut self, args: Self::ArgsType) -> Result<String> {
+        let started_at = Instant::now();
         let pic_url = args;
-        let pic_img = self.download_img(pic_url.as_str())?;
-        let pic_img = image::load_from_memory(&pic_img).map_err(|e| other("图片加载失败", e))?;
+        tracing::debug!(url_length = pic_url.len(), "开始下载点选验证码图片");
+        let pic_bytes = self.download_img(pic_url.as_str())?;
+        let pic_img = image::load_from_memory(&pic_bytes).map_err(|e| other("图片加载失败", e))?;
+        tracing::debug!(
+            bytes = pic_bytes.len(),
+            width = pic_img.width(),
+            height = pic_img.height(),
+            "点选验证码图片已加载"
+        );
+        debug::save_image("click", &pic_img);
 
+        let inference_started_at = Instant::now();
         let cb_res = self
             .cb
             .run(&pic_img)
-            .map_err(|_| other_without_source("cb模块内部错误"))?;
+            .map_err(|e| {
+                tracing::debug!(
+                    error = %e,
+                    inference_ms = inference_started_at.elapsed().as_millis(),
+                    "点选识别模型执行失败"
+                );
+                other_without_source(&format!("cb模块内部错误: {}", e))
+            })?;
         let mut res = vec![];
         for (x, y) in &cb_res {
             let position = format!(
@@ -364,7 +382,15 @@ impl GenerateW for Click {
             );
             res.push(position);
         }
-        Ok(res.join(","))
+        let key = res.join(",");
+        tracing::debug!(
+            point_count = cb_res.len(),
+            key = %key,
+            inference_ms = inference_started_at.elapsed().as_millis(),
+            total_ms = started_at.elapsed().as_millis(),
+            "点选识别完成"
+        );
+        Ok(key)
     }
 
     fn generate_w(
@@ -375,7 +401,14 @@ impl GenerateW for Click {
         _c: &[u8],
         _s: &str,
     ) -> Result<String> {
-        Ok(click_calculate(key, gt, challenge))
+        let w = click_calculate(key, gt, challenge);
+        tracing::debug!(
+            point_count = key.split(',').filter(|point| !point.is_empty()).count(),
+            key_length = key.len(),
+            w_length = w.len(),
+            "点选 w 参数已生成"
+        );
+        Ok(w)
     }
 }
 
