@@ -401,7 +401,7 @@ impl GenerateW for Click {
         _c: &[u8],
         _s: &str,
     ) -> Result<String> {
-        let w = click_calculate(key, gt, challenge);
+        let w = click_calculate(key, gt, challenge)?;
         tracing::debug!(
             point_count = key.split(',').filter(|point| !point.is_empty()).count(),
             key_length = key.len(),

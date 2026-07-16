@@ -138,7 +138,7 @@ fn get_random_webgl() -> (&'static str, &'static str) {
     }
 }
 
-pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> String {
+pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> Result<String> {
     let pass_time = (random::<f32>() * 700f32 + 1300f32) as usize;
     let m5 = md5::compute(format!("{}{}{}", gt, &challenge[..challenge.len()-2].to_string(), pass_time));
     let rp = hex::encode(m5.to_vec());
