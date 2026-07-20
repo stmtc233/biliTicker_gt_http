@@ -7,9 +7,8 @@ pub struct Error {
     inner: Box<Inner>,
 }
 
-/// 不强制 `Send + Sync`，以便直接容纳第三方库返回的 `Box<dyn StdError>`
-/// 等无法证明 `Send + Sync` 的错误源，使错误能够正确冒泡而非被丢弃。
-pub(crate) type BoxError = Box<dyn StdError>;
+/// HTTP 服务会通过 `spawn_blocking` 跨线程返回此错误，因此错误源必须可安全传递。
+pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
 
 /// ### 错误内容
 /// - kind: 错误类型
@@ -96,13 +95,6 @@ pub(crate) fn other<E: Into<BoxError>>(s: &str, e: E) -> Error {
 
 pub(crate) fn other_without_source(s: &str) -> Error {
     Error::new_without_source(Kind::Other(s.to_string()))
-}
-
-/// 直接将第三方返回的 `Box<dyn StdError>` 冒泡为 `Error`，避免丢失错误源。
-impl From<Box<dyn StdError>> for Error {
-    fn from(e: Box<dyn StdError>) -> Self {
-        other("内部错误", e)
-    }
 }
 
 /// 网络层错误（请求发送、响应读取等）直接用 `?` 冒泡。

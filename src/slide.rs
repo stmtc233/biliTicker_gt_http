@@ -306,13 +306,13 @@ impl GenerateW for Slide {
         c: &[u8],
         s: &str,
     ) -> Result<String> {
-        Ok(slide_calculate(
+        slide_calculate(
             key.parse().map_err(|e| other("滑动距离不是整数类型", e))?,
             gt,
             challenge,
             c,
             s,
-        ))
+        )
     }
 }
 

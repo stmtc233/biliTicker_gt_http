@@ -5,6 +5,8 @@ use rand::rngs::OsRng;
 use serde_json::{json};
 use soft_aes::aes::aes_enc_cbc;
 
+use crate::error::{other, other_without_source, Result};
+
 const RSA_N: &str = "00C1E3934D1614465B33053E7F48EE4EC87B14B95EF88947713D25EECBFF7E74C7977D02DC1D9451F79DD5D1C10C29ACB6A9B4D6FB7D0A0279B6719E1772565F09AF627715919221AEF91899CAE08C0D686D748B20A3603BE2318CA6BC2B59706592A9219D0BF05C9F65023A21D2330807252AE0066D59CEEFA5F2748EA80BAB81";
 const RSA_E: &str = "010001";
 const AES_KEY: &str = "1234567890123456";
@@ -78,37 +80,37 @@ pub fn base64(input: &[u8]) -> String {
     format!("{}{}", result, padding)
 }
 
-fn rsa_encrypt(data: &str) -> String {
-    let n_bytes = hex::decode(RSA_N).expect("Invalid hex for modulus (n)");
-    let e_bytes = hex::decode(RSA_E).expect("Invalid hex for exponent (e)");
+fn rsa_encrypt(data: &str) -> Result<String> {
+    let n_bytes = hex::decode(RSA_N).map_err(|e| other("RSA modulus hex 解析失败", e))?;
+    let e_bytes = hex::decode(RSA_E).map_err(|e| other("RSA exponent hex 解析失败", e))?;
 
     let n = BigUint::from_bytes_be(&n_bytes);
     let e = BigUint::from_bytes_be(&e_bytes);
 
-    // 构建 RSA 公钥
-    let pub_key = RsaPublicKey::new(n, e).expect("Invalid RSA public key");
+    let pub_key =
+        RsaPublicKey::new(n, e).map_err(|e| other("RSA 公钥构建失败", e))?;
 
-    // 使用 PKCS#1 v1.5 填充进行加密
     let padding = Pkcs1v15Encrypt;
     let mut rng = OsRng;
     let encrypted_data = pub_key
         .encrypt(&mut rng, padding, data.as_bytes())
-        .expect("Encryption failed");
+        .map_err(|e| other("RSA 加密失败", e))?;
 
-    // 转换为十六进制字符串
-    hex::encode(encrypted_data)
+    Ok(hex::encode(encrypted_data))
 }
 
-fn aes_encrypt(data: &str) -> Vec<u8> {
-    let encrypted = aes_enc_cbc(data.as_bytes(), AES_KEY.as_bytes(), &AES_IV, Some("PKCS7")).unwrap();
-    encrypted
+fn aes_encrypt(data: &str) -> Result<Vec<u8>> {
+    let encrypted =
+        aes_enc_cbc(data.as_bytes(), AES_KEY.as_bytes(), &AES_IV, Some("PKCS7"))
+            .map_err(|e| other_without_source(&format!("AES 加密失败: {e}")))?;
+    Ok(encrypted)
 }
 
-fn encrypt(json_str: &str) -> String{
-    let u = rsa_encrypt(AES_KEY);
-    let h = aes_encrypt(json_str);
+fn encrypt(json_str: &str) -> Result<String> {
+    let u = rsa_encrypt(AES_KEY)?;
+    let h = aes_encrypt(json_str)?;
     let p = base64(h.as_ref());
-    format!("{}{}", p, u)
+    Ok(format!("{}{}", p, u))
 }
 
 fn get_random_webgl() -> (&'static str, &'static str) {
@@ -206,9 +208,9 @@ pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> Result<St
     encrypt(dic.to_string().as_str())
 }
 
-fn get_slide_track(distance: i32) -> Vec<Vec<i32>> {
+fn get_slide_track(distance: i32) -> Result<Vec<Vec<i32>>> {
     if distance < 0 {
-        panic!("distance必须大于等于0");
+        return Err(other_without_source("滑动距离必须大于等于0"));
     }
 
     let mut slide_track = Vec::new();
@@ -255,7 +257,7 @@ fn get_slide_track(distance: i32) -> Vec<Vec<i32>> {
         slide_track.push(last.clone());
     }
 
-    slide_track
+    Ok(slide_track)
 }
 
 fn track_encrypt(track: &Vec<Vec<i32>>) -> String {
@@ -463,9 +465,11 @@ fn user_response(key: i32, challenge: &str) -> String {
 }
 
 
-pub fn slide_calculate(key: i32, gt: &str, challenge: &str, c: &[u8], s: &str) -> String {
-    let track = get_slide_track(key);
-    let pass_time = track.last().unwrap()[2];
+pub fn slide_calculate(key: i32, gt: &str, challenge: &str, c: &[u8], s: &str) -> Result<String> {
+    let track = get_slide_track(key)?;
+    let pass_time = track
+        .last()
+        .ok_or_else(|| other_without_source("滑动轨迹为空"))?[2];
     let aa = {
         let encrypted_track = track_encrypt(&track);
         final_encrypt(encrypted_track, c, s.to_string())
