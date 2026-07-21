@@ -20,7 +20,8 @@ reqwest = {version = "0.12", features = ["blocking", "json"]}
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = "0.25"
-captcha_breaker = "0.0.0-dev.7"
+# Includes the Issue #28 fix for click challenges whose question and answer counts differ.
+captcha_breaker = { git = "https://github.com/Amorter/CaptchaBreaker", rev = "e38d3c2798782a59a6feaf743adc4dcb7ec70b43" }
 rsa = "0.9"
 rand = "0.8.5"
 hex = "0.4"
