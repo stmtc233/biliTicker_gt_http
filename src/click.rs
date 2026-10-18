@@ -12,25 +12,38 @@ use once_cell::sync::Lazy;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 // 修改：引入 SystemTime 和 UNIX_EPOCH 用于生成时间戳
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-static GLOBAL_CLICK_BREAKER: Lazy<Arc<ChineseClick0>> = Lazy::new(|| {
+static GLOBAL_CLICK_BREAKER: Lazy<ChineseClick0> = Lazy::new(|| {
     println!("Loading ChineseClick0 ONNX model... This should only happen once.");
     let env = CaptchaEnvironment::default();
     let breaker = env.load_captcha_breaker::<ChineseClick0>().unwrap();
     println!("Model loaded successfully.");
-    Arc::new(breaker)
+    breaker
 });
+
+// ONNX Runtime 默认每次推理就会用满所有物理核，多个请求并发推理只会互相抢占线程，
+// 因此串行执行推理，避免线程超额订阅。
+static INFERENCE_LOCK: Mutex<()> = Mutex::new(());
+
+/// 在后台预加载点选模型，避免首个请求承担模型加载（或下载）耗时。
+pub fn warm_up() {
+    let started_at = Instant::now();
+    Lazy::force(&GLOBAL_CLICK_BREAKER);
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "点选识别模型预加载完成"
+    );
+}
 
 #[derive(Clone)]
 pub struct Click {
     client: Arc<Client>,
     download_client: Arc<Client>,
     verify_type: VerifyType,
-    cb: Arc<ChineseClick0>,
 }
 
 impl Click {
@@ -39,7 +52,6 @@ impl Click {
             client,
             download_client,
             verify_type: VerifyType::Click,
-            cb: Arc::clone(&GLOBAL_CLICK_BREAKER),
         }
     }
 
@@ -361,18 +373,22 @@ impl GenerateW for Click {
         );
         debug::save_image("click", &pic_img);
 
-        let inference_started_at = Instant::now();
-        let cb_res = self
-            .cb
-            .run(&pic_img)
-            .map_err(|e| {
-                tracing::debug!(
-                    error = %e,
-                    inference_ms = inference_started_at.elapsed().as_millis(),
-                    "点选识别模型执行失败"
-                );
-                other_without_source(&format!("cb模块内部错误: {}", e))
-            })?;
+        let breaker = &*GLOBAL_CLICK_BREAKER;
+        let (cb_res, inference_started_at) = {
+            let _inference_guard = INFERENCE_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let inference_started_at = Instant::now();
+            (breaker.run(&pic_img), inference_started_at)
+        };
+        let cb_res = cb_res.map_err(|e| {
+            tracing::debug!(
+                error = %e,
+                inference_ms = inference_started_at.elapsed().as_millis(),
+                "点选识别模型执行失败"
+            );
+            other_without_source(&format!("cb模块内部错误: {}", e))
+        })?;
         let mut res = vec![];
         for (x, y) in &cb_res {
             let position = format!(

@@ -30,6 +30,12 @@ md5 = "0.7"
 once_cell = "1.19"
 lru = "0.12"
 
+[profile.release]
+# 不能使用 panic = "abort"：HTTP 服务依赖 catch_unwind 捕获阻塞任务中的 panic
+lto = "fat"
+codegen-units = 1
+strip = true
+
 [patch.crates-io]
 # Use the Windows CPU-only ONNX Runtime build to avoid the DirectML/D3D12 requirement.
 ort = { git = "https://github.com/biliticket/ort", rev = "512596a9468528056f4ae4262c9e21de14743510" }

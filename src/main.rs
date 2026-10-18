@@ -82,8 +82,9 @@ impl ClientManager {
             .connect_timeout(Duration::from_secs(10))
             // 设置请求超时
             .timeout(Duration::from_secs(10))
-            // 设置连接池空闲超时
-            .pool_idle_timeout(Duration::from_secs(10));
+            // 设置连接池空闲超时：保持较长时间以便跨请求复用到极验的连接，省去重复的 TCP/TLS 握手
+            .pool_idle_timeout(Duration::from_secs(90))
+            .tcp_keepalive(Duration::from_secs(60));
 
         if let Some(referer_to_set) = referer {
             let mut headers = HeaderMap::new();
@@ -716,6 +717,9 @@ async fn main() {
             "调试模式已开启"
         );
     }
+
+    // 后台预加载点选模型，不阻塞服务启动
+    task::spawn_blocking(click::warm_up);
 
     let state = AppState::new();
 
