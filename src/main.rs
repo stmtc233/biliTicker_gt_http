@@ -18,6 +18,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tokio::task;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
@@ -29,6 +30,7 @@ mod click;
 mod debug;
 mod error;
 mod slide;
+mod v4;
 mod w;
 
 use crate::abstraction::{Api, GenerateW, Test, VerifyType};
@@ -115,15 +117,19 @@ struct AppState {
     client_manager: ClientManager,
     click_instances: Arc<Mutex<LruCache<String, Click>>>,
     slide_instances: Arc<Mutex<LruCache<String, Slide>>>,
+    v4_service: Arc<v4::V4Service>,
+    v4_slots: Arc<Semaphore>,
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(v4_service: Arc<v4::V4Service>, v4_concurrency: usize) -> Self {
         let cache_size = NonZeroUsize::new(INSTANCE_CACHE_SIZE).unwrap();
         Self {
             client_manager: ClientManager::new(),
             click_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
             slide_instances: Arc::new(Mutex::new(LruCache::new(cache_size))),
+            v4_service,
+            v4_slots: Arc::new(Semaphore::new(v4_concurrency.max(1))),
         }
     }
 }
@@ -201,6 +207,7 @@ impl<T> ApiResponse<T> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn get_click_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -255,6 +262,7 @@ fn get_click_instance(
     Ok(new_instance)
 }
 
+#[allow(clippy::result_large_err)]
 fn get_slide_instance(
     state: &AppState,
     session_id: Option<String>,
@@ -678,6 +686,67 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
+#[derive(Serialize)]
+struct V4HealthResponse {
+    status: &'static str,
+    solved: u64,
+    failed: u64,
+    uptime_seconds: f64,
+}
+
+async fn v4_health(State(state): State<AppState>) -> Response {
+    let (solved, failed, uptime_seconds) = state.v4_service.health();
+    Json(V4HealthResponse {
+        status: "ok",
+        solved,
+        failed,
+        uptime_seconds: (uptime_seconds * 10.0).round() / 10.0,
+    })
+    .into_response()
+}
+
+async fn geetest4_solve(
+    State(state): State<AppState>,
+    Json(request): Json<v4::SolveRequest>,
+) -> Response {
+    let permit = match Arc::clone(&state.v4_slots).acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse::<()>::error(
+                    "GeeTest v4 solver is shutting down".to_string(),
+                )),
+            )
+                .into_response()
+        }
+    };
+    let service = Arc::clone(&state.v4_service);
+    let result = match task::spawn_blocking(move || {
+        let _permit = permit;
+        service.solve(request)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => Err(error::other_without_source(&format!(
+            "GeeTest v4 worker panicked: {error}"
+        ))),
+    };
+    match result {
+        Ok(data) => (StatusCode::OK, Json(ApiResponse::success(data))).into_response(),
+        Err(error) => {
+            let message = error.to_string();
+            let status = if message.to_ascii_lowercase().contains("forbidden") {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            (status, Json(ApiResponse::<()>::error(message))).into_response()
+        }
+    }
+}
+
 fn install_panic_hook() {
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -718,13 +787,41 @@ async fn main() {
         );
     }
 
-    // 后台预加载点选模型，不阻塞服务启动
+    // V3 点选模型后台预加载，V4 模型在启动时完成加载与预热。
     task::spawn_blocking(click::warm_up);
 
-    let state = AppState::new();
+    let v4_concurrency = v4::env_usize("GT4_MAX_CONCURRENCY", 4, 1, 4);
+    let v4_threads = v4::env_usize("GT4_ORT_THREADS", 2, 1, 8);
+    let v4_model_dir = v4::model_dir_from_env();
+    tracing::info!(
+        model_dir = %v4_model_dir.display(),
+        concurrency = v4_concurrency,
+        threads = v4_threads,
+        "正在加载 GeeTest V4 ONNX 模型"
+    );
+    let v4_service = match task::spawn_blocking(move || {
+        v4::V4Service::load(&v4_model_dir, v4_concurrency, v4_threads)
+    })
+    .await
+    {
+        Ok(Ok(service)) => Arc::new(service),
+        Ok(Err(error)) => {
+            tracing::error!(error = %error, "GeeTest V4 模型加载失败，服务启动终止");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "GeeTest V4 模型加载任务失败，服务启动终止");
+            std::process::exit(1);
+        }
+    };
+
+    let state = AppState::new(v4_service, v4_concurrency);
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/v4/health", get(v4_health))
+        .route("/v4/solve", post(geetest4_solve))
+        .route("/api/geetest/solve", post(geetest4_solve))
         .route("/click/simple_match", post(click_simple_match))
         .route("/click/simple_match_retry", post(click_simple_match_retry))
         .route("/click/register_test", post(click_register_test))

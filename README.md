@@ -1,3 +1,86 @@
+# biliTicker_gt_http
+
+Rust HTTP 服务，支持原有点选/滑块，并内置 GeeTest v4 图标点选。v4 协议、AES/RSA
+载荷加密、鼠标轨迹和 ONNX 推理全部在 Rust 进程内完成，不再依赖 Python sidecar。
+
+## GeeTest v4
+
+### 启动
+
+```bash
+cargo build --release
+sh start.sh
+```
+
+Windows 解压 release 包后直接运行：
+
+```bat
+start.bat
+```
+
+模型位于 `models/`，默认监听 `0.0.0.0:3000`：
+
+- `models/detect.onnx`：快速图标检测器
+- `models/detect_icon3.onnx`：低对比度兜底检测器
+- `models/simvgg19.onnx`：Siamese 相似度模型
+
+### API
+
+`POST /v4/solve`，兼容旧客户端别名 `POST /api/geetest/solve`：
+
+```json
+{
+  "captcha_id": "B 站 gee_gt",
+  "challenge": "B 站 gee_challenge",
+  "risk_type": "icon",
+  "max_attempts": 6,
+  "proxy": "socks5://127.0.0.1:1080"
+}
+```
+
+成功响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "lot_number": "...",
+    "captcha_output": "...",
+    "pass_token": "...",
+    "gen_time": "...",
+    "attempts": 1,
+    "elapsed_ms": 3587.2,
+    "candidate_count": 4
+  },
+  "error": null
+}
+```
+
+`GET /v4/health` 返回求解成功/失败计数与运行时间。`max_attempts` 默认 6，上限 10；
+代理请求失败会回退直连，且同一任务的 `/load`、资源下载、`/verify` 会尽量复用代理出口。
+
+### 性能设计
+
+- 模型启动时加载并预热，请求间复用 ONNX Runtime session。
+- 探测/匹配 session 池默认 2 份，服务并发上限默认 4，避免所有请求争抢同一把推理锁。
+- 识别先走紧凑检测器与前 2 个排列，失败后才启用 42 MB 兜底检测器和更多候选排列。
+- 首次校验等待 1.8 秒，失败重试间隔 1.2 秒，降低极验风控误判。
+- 实测一次命中约 3.1–3.7 秒（含 1.8 秒拟人等待）；低对比度挑战通常第 2–3 次通过。
+
+### 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `GT4_MODEL_DIR` | `models` | ONNX 模型目录 |
+| `GT4_MAX_CONCURRENCY` | `4` | 同时求解上限，范围 1–4 |
+| `GT4_ORT_THREADS` | `2` | 每个 ONNX session 的 CPU 线程数 |
+
+### 模型许可
+
+详见 `models/NOTICE.md`。服务端和模型仅供你有权操作的账号与授权测试使用。
+
+---
+
 ## 极验验证模块的python语言绑定
 
 - 以前的[赞助名单](docs/ZANZHU.md)

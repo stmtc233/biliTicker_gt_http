@@ -1,1 +1,2 @@
 *.js linguist-language=Rust
+models/*.onnx binary

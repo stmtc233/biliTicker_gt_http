@@ -1,6 +1,12 @@
 *.pyd
 target/
-Cargo.lock
-models/
 geetest-v3-click-crack-main/
 geetest-v3-click-crack-main.zip
+
+# V4 模型（只跟踪发布所需文件，忽略 V3 运行时下载的模型）
+models/*
+!models/detect.onnx
+!models/detect_icon3.onnx
+!models/simvgg19.onnx
+!models/NOTICE.md
+!models/SHA256SUMS

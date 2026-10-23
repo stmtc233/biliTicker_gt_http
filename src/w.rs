@@ -142,7 +142,7 @@ fn get_random_webgl() -> (&'static str, &'static str) {
 
 pub(crate) fn click_calculate(key: &str, gt: &str, challenge: &str) -> Result<String> {
     let pass_time = (random::<f32>() * 700f32 + 1300f32) as usize;
-    let m5 = md5::compute(format!("{}{}{}", gt, &challenge[..challenge.len()-2].to_string(), pass_time));
+    let m5 = md5::compute(format!("{}{}{}", gt, &challenge[..challenge.len() - 2], pass_time));
     let rp = hex::encode(m5.to_vec());
 
     let now_ms = std::time::SystemTime::now()
@@ -260,7 +260,7 @@ fn get_slide_track(distance: i32) -> Result<Vec<Vec<i32>>> {
     Ok(slide_track)
 }
 
-fn track_encrypt(track: &Vec<Vec<i32>>) -> String {
+fn track_encrypt(track: &[Vec<i32>]) -> String {
     // 轨迹处理函数
     fn process_track(track: &[Vec<i32>]) -> Vec<Vec<i32>> {
         let mut result = Vec::new();

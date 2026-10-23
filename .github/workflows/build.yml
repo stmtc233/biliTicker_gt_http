@@ -30,12 +30,14 @@ jobs:
             os: ubuntu-latest
             artifact_name: bili_ticket_gt_server
             asset_name: bili-ticket-gt-server-linux-x86_64
+            archive_name: bili-ticket-gt-server-linux-x86_64.tar.gz
             
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact_name: bili_ticket_gt_server.exe
             asset_name: bili-ticket-gt-server-windows-x86_64.exe
+            archive_name: bili-ticket-gt-server-windows-x86_64.zip
 
     steps:
     - name: Checkout code
@@ -139,11 +141,31 @@ jobs:
         Write-Host "Copying to: $destPath"
         Copy-Item -Path $sourcePath -Destination $destPath
 
+    - name: Package release (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir -p artifacts/package/models
+        cp artifacts/${{ matrix.asset_name }} artifacts/package/bili_ticket_gt_server
+        cp models/*.onnx models/NOTICE.md models/SHA256SUMS artifacts/package/models/
+        cp README.md start.sh artifacts/package/
+        tar -czf artifacts/${{ matrix.archive_name }} -C artifacts/package .
+
+    - name: Package release (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path artifacts/package/models | Out-Null
+        Copy-Item artifacts/${{ matrix.asset_name }} artifacts/package/bili_ticket_gt_server.exe
+        Copy-Item models/*.onnx artifacts/package/models/
+        Copy-Item models/NOTICE.md,models/SHA256SUMS artifacts/package/models/
+        Copy-Item README.md,start.bat artifacts/package/
+        Compress-Archive -Path artifacts/package/* -DestinationPath artifacts/${{ matrix.archive_name }} -Force
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.asset_name }}
-        path: artifacts/${{ matrix.asset_name }}
+        name: ${{ matrix.archive_name }}
+        path: artifacts/${{ matrix.archive_name }}
         retention-days: 30
 
   # 创建 GitHub Release（仅当推送标签时）

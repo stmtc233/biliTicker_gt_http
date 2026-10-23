@@ -13,12 +13,14 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 # 设置工作目录
 WORKDIR /app
 
-# 复制编译好的二进制文件
+# 复制编译好的二进制文件与 V4 模型
 COPY bili-ticket-gt-server-linux-x86_64 /app/bili_ticket_gt_server
+COPY models /app/models
+COPY README.md /app/README.md
 
 # 设置权限
 RUN chmod +x /app/bili_ticket_gt_server && \
-    chown appuser:appuser /app/bili_ticket_gt_server
+    chown -R appuser:appuser /app
 
 # 切换到非 root 用户
 USER appuser
